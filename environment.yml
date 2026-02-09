@@ -1,0 +1,15 @@
+name: hillclimb
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.11
+  - numpy>=1.24
+  - opencv>=4.8
+  - pillow>=10.0
+  - pytorch>=2.1
+  - tensorboard>=2.14
+  - pip:
+    - mss>=9.0
+    - stable-baselines3>=2.3
+    - gymnasium>=0.29
