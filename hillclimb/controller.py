@@ -18,15 +18,10 @@ class Action(IntEnum):
 class ADBController:
     """Send touch events to Android via ADB."""
 
-    # Physical screen height in portrait (used for coordinate conversion)
-    _PORTRAIT_H = 2340
-
     def __init__(self) -> None:
         self._device_args: list[str] = (
             ["-s", cfg.adb_device] if cfg.adb_device else []
         )
-        self._landscape_input: bool = True
-        self._last_mode_check: float = 0.0
         self._verify_connection()
 
     # ------------------------------------------------------------------
@@ -63,36 +58,11 @@ class ADBController:
     # ------------------------------------------------------------------
 
     def _hold(self, x: int, y: int, duration_ms: int) -> None:
-        """Simulate long press via `input swipe`.
-
-        Coordinates are in landscape (2340x1080). Automatically converts
-        to portrait if scrcpy is not handling input forwarding.
-        """
-        tx, ty = self._to_input_coords(x, y)
+        """Simulate long press via `input swipe` with same start/end coords."""
         self._adb(
             "input", "swipe",
-            str(tx), str(ty), str(tx), str(ty), str(duration_ms),
+            str(x), str(y), str(x), str(y), str(duration_ms),
         )
-
-    def _to_input_coords(self, lx: int, ly: int) -> tuple[int, int]:
-        """Convert landscape coords to what `input` expects.
-
-        When scrcpy server is running on device, `input` accepts landscape.
-        Otherwise, `input` uses portrait coords (orientation=3 rotation).
-        Caches the check for 10 seconds to avoid overhead.
-        """
-        now = time.monotonic()
-        if now - self._last_mode_check > 10.0:
-            self._last_mode_check = now
-            try:
-                ps_out = self._adb("ps", "-A")
-                self._landscape_input = "scrcpy" in ps_out
-            except Exception:
-                self._landscape_input = True
-        if self._landscape_input:
-            return (lx, ly)
-        # No scrcpy → portrait: px = ly, py = 2340 - lx
-        return (ly, self._PORTRAIT_H - lx)
 
     def _adb(self, *args: str) -> str:
         cmd = [cfg.adb_path] + self._device_args + ["shell"] + list(args)
