@@ -135,19 +135,17 @@ class VisionAnalyzer:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
         # 0. CAPTCHA: "ARE YOU A ROBOT?" — попап с роботом
-        #    Верхние 8%: тёмная полоса с ярким белым текстом "ARE YOU A ROBOT?"
-        #    Боковые края затемнены (попап перекрывает игру)
-        #    Отличие от DRIVER_DOWN: нет оранжевого, центр НЕ тёмный (робот виден)
+        #    Верхние 8%: почти полностью тёмные (>0.7)
+        #    Боковые края тоже тёмные (>0.6) — попап перекрывает игру
+        #    RACING: top8_dark~0.05, DRIVER_DOWN: edges не тёмные
         top_8 = hsv[:int(h * 0.08), :]
         t8_dark = np.mean(top_8[:, :, 2] < 80)
-        t8_white = np.mean(top_8[:, :, 2] > 180)
-        if t8_dark > 0.4 and t8_white > 0.03:
-            # Подтверждаем: боковые края тоже тёмные
-            left_e = hsv[:, :int(w * 0.1)]
-            right_e = hsv[:, int(w * 0.9):]
+        if t8_dark > 0.7:
+            left_e = hsv[:, :int(w * 0.08)]
+            right_e = hsv[:, int(w * 0.92):]
             edges_dark = (np.mean(left_e[:, :, 2] < 80) +
                           np.mean(right_e[:, :, 2] < 80)) / 2
-            if edges_dark > 0.3:
+            if edges_dark > 0.6:
                 return GameState.CAPTCHA
 
         # 1. DRIVER_DOWN: orange star burst in upper-center area

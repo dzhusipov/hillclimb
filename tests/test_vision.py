@@ -191,6 +191,9 @@ class TestGameStateClassifier:
     def test_dark_with_orange_is_driver_down(self, analyzer: VisionAnalyzer):
         """Dark frame with orange burst in upper-center -> DRIVER_DOWN."""
         frame = np.full((600, 800, 3), 30, dtype=np.uint8)
+        # Edges NOT dark (game HUD visible) — prevents CAPTCHA false positive
+        frame[:, :64] = [100, 100, 100]
+        frame[:, 736:] = [100, 100, 100]
         # Add orange pixels in upper-center region (H~15 in HSV)
         import cv2
         upper_center = frame[100:200, 260:540]
@@ -212,7 +215,7 @@ class TestGameStateClassifier:
     def test_generic_frame_with_dials_is_racing(self, analyzer: VisionAnalyzer):
         """Frame with dial + red needle -> RACING."""
         import cv2
-        frame = np.full((1080, 2340, 3), 50, dtype=np.uint8)
+        frame = np.full((1080, 2340, 3), 120, dtype=np.uint8)
         roi = cfg.rpm_dial_roi
         # Draw dial background
         cv2.circle(frame, (roi.cx, roi.cy), roi.radius, (100, 100, 100), -1)
