@@ -52,7 +52,11 @@ class Config:
     scrcpy_window_title: str = "scrcpy"
 
     # -- ADB ------------------------------------------------------------------
+    adb_path: str = str(Path.home() / "Library/Android/sdk/platform-tools/adb")
     adb_device: str = ""  # empty = first connected device
+
+    # -- Capture method: "adb" (native res, ~200ms) or "mss" (scrcpy window, ~5ms)
+    capture_method: str = "adb"
 
     # -- Gas / Brake (in Android screen coords, landscape) --------------------
     gas_button: Point = field(default_factory=lambda: Point(x=2200, y=900))
@@ -62,10 +66,10 @@ class Config:
     race_button: Point = field(default_factory=lambda: Point(x=1170, y=900))
     start_button: Point = field(default_factory=lambda: Point(x=2100, y=950))
     back_button: Point = field(default_factory=lambda: Point(x=200, y=950))
-    skip_button: Point = field(default_factory=lambda: Point(x=1170, y=750))
+    skip_button: Point = field(default_factory=lambda: Point(x=870, y=875))
     close_popup_button: Point = field(default_factory=lambda: Point(x=1170, y=600))
-    retry_button: Point = field(default_factory=lambda: Point(x=600, y=950))
-    next_button: Point = field(default_factory=lambda: Point(x=1750, y=950))
+    retry_button: Point = field(default_factory=lambda: Point(x=180, y=1000))
+    next_button: Point = field(default_factory=lambda: Point(x=2150, y=1000))
     center_screen: Point = field(default_factory=lambda: Point(x=1170, y=540))
 
     # -- Legacy aliases (kept for controller.py compatibility) -----------------
@@ -90,11 +94,11 @@ class Config:
     rpm_gauge_roi: Rect = field(default_factory=lambda: Rect(x=300, y=10, w=150, h=20))
     boost_gauge_roi: Rect = field(default_factory=lambda: Rect(x=500, y=10, w=150, h=20))
 
-    # -- OCR ROIs -------------------------------------------------------------
+    # -- OCR ROIs (calibrated for Redmi Note 8 Pro results screen) -----------
     distance_text_roi: Rect = field(default_factory=lambda: Rect(x=1050, y=880, w=230, h=50))
-    coins_text_roi: Rect = field(default_factory=lambda: Rect(x=50, y=20, w=200, h=40))
-    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=900, y=350, w=300, h=50))
-    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=900, y=450, w=300, h=50))
+    coins_text_roi: Rect = field(default_factory=lambda: Rect(x=780, y=710, w=140, h=80))
+    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=780, y=710, w=140, h=80))
+    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=1200, y=710, w=320, h=80))
 
     # -- Vehicle ROI (where the car typically sits) ---------------------------
     vehicle_roi: Rect = field(default_factory=lambda: Rect(x=200, y=300, w=400, h=200))

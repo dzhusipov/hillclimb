@@ -65,7 +65,7 @@ class ADBController:
         )
 
     def _adb(self, *args: str) -> str:
-        cmd = ["adb"] + self._device_args + ["shell"] + list(args)
+        cmd = [cfg.adb_path] + self._device_args + ["shell"] + list(args)
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=5,
         )

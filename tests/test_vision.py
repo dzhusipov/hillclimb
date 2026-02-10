@@ -210,12 +210,18 @@ class TestGameStateClassifier:
         assert state == GameState.RESULTS
 
     def test_generic_frame_with_dials_is_racing(self, analyzer: VisionAnalyzer):
-        """Frame with some brightness in the dial region -> RACING (via fallback)."""
-        frame = np.full((1080, 2340, 3), 50, dtype=np.uint8)
-        # Add some brightness in the RPM dial region
-        roi = cfg.rpm_dial_roi
+        """Frame with dial + red needle -> RACING."""
         import cv2
+        frame = np.full((1080, 2340, 3), 50, dtype=np.uint8)
+        roi = cfg.rpm_dial_roi
+        # Draw dial background
         cv2.circle(frame, (roi.cx, roi.cy), roi.radius, (100, 100, 100), -1)
+        # Draw red needle line (required for RACING detection)
+        mid_angle = (cfg.needle_min_angle + cfg.needle_max_angle) / 2
+        rad = math.radians(mid_angle)
+        ex = int(roi.cx + roi.radius * 0.8 * math.cos(rad))
+        ey = int(roi.cy - roi.radius * 0.8 * math.sin(rad))
+        cv2.line(frame, (roi.cx, roi.cy), (ex, ey), (0, 0, 255), 3)
         state = analyzer._classify_state(frame)
         assert state == GameState.RACING
 

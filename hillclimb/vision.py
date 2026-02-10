@@ -168,18 +168,17 @@ class VisionAnalyzer:
         if green_bl > 0.08 and green_br > 0.08:
             return GameState.RESULTS
 
-        # 4. DOUBLE_COINS_POPUP: SKIP button in center area
-        #    Look for vivid button in center-bottom region
-        center_bottom = hsv[h // 2 : int(h * 0.8), w // 3 : 2 * w // 3]
-        vivid_center = (
-            (center_bottom[:, :, 1] > 100) & (center_bottom[:, :, 2] > 120)
-        )
-        vivid_center_ratio = np.mean(vivid_center)
-        # Also check for popup background (bright, low-sat top half)
-        top_half = hsv[: h // 2, w // 4 : 3 * w // 4]
-        bright_low_sat = (top_half[:, :, 2] > 180) & (top_half[:, :, 1] < 60)
-        popup_ratio = np.mean(bright_low_sat)
-        if vivid_center_ratio > 0.05 and popup_ratio > 0.15:
+        # 4. DOUBLE_COINS_POPUP: yellow SKIP button in center + darkened edges
+        center_region = hsv[int(h * 0.55) : int(h * 0.75),
+                            int(w * 0.3) : int(w * 0.6)]
+        yellow_lower = np.array([18, 100, 150], dtype=np.uint8)
+        yellow_upper = np.array([35, 255, 255], dtype=np.uint8)
+        yellow_mask = cv2.inRange(center_region, yellow_lower, yellow_upper)
+        yellow_ratio = np.mean(yellow_mask > 0)
+        # Darkened right edge (popup overlay)
+        right_edge = hsv[h // 4 : 3 * h // 4, 5 * w // 6 :]
+        dark_edge = np.mean(right_edge[:, :, 2] < 80)
+        if yellow_ratio > 0.07 and dark_edge > 0.10:
             return GameState.DOUBLE_COINS_POPUP
 
         # 5. VEHICLE_SELECT: START button bottom-right + BACK button bottom-left
@@ -196,23 +195,32 @@ class VisionAnalyzer:
             if green_bl < 0.05:  # left button is NOT green = not RESULTS
                 return GameState.VEHICLE_SELECT
 
-        # 6. MAIN_MENU: RACE button in centre-bottom, vivid colours
+        # 6. RACING: dial gauges visible at bottom-center
+        #    Check BEFORE MAIN_MENU since racing HUD has vivid dials/pedals
+        dial_region = self._crop_circle_roi(frame, cfg.rpm_dial_roi)
+        if dial_region is not None:
+            dial_hsv = cv2.cvtColor(dial_region, cv2.COLOR_BGR2HSV)
+            dial_brightness = np.mean(dial_hsv[:, :, 2])
+            # Also check for red needle pixels in dial (confirms it's a gauge)
+            needle_mask = (
+                cv2.inRange(dial_hsv,
+                            np.array(cfg.needle_hsv_lower1, dtype=np.uint8),
+                            np.array(cfg.needle_hsv_upper1, dtype=np.uint8))
+                | cv2.inRange(dial_hsv,
+                              np.array(cfg.needle_hsv_lower2, dtype=np.uint8),
+                              np.array(cfg.needle_hsv_upper2, dtype=np.uint8))
+            )
+            has_needle = np.mean(needle_mask > 0) > 0.005
+            if dial_brightness > 30 and has_needle:
+                return GameState.RACING
+
+        # 7. MAIN_MENU: RACE button in centre-bottom, vivid colours
         bottom_center = hsv[int(h * 0.7) :, w // 3 : 2 * w // 3]
         vivid_bc = (
             (bottom_center[:, :, 1] > 120) & (bottom_center[:, :, 2] > 120)
         )
         if np.mean(vivid_bc) > 0.10:
             return GameState.MAIN_MENU
-
-        # 7. RACING: dial gauges visible at bottom-center
-        #    Check if we can see the dial region (not black/empty)
-        dial_region = self._crop_circle_roi(frame, cfg.rpm_dial_roi)
-        if dial_region is not None:
-            dial_hsv = cv2.cvtColor(dial_region, cv2.COLOR_BGR2HSV)
-            # Dials have moderate brightness, not all-black
-            dial_brightness = np.mean(dial_hsv[:, :, 2])
-            if dial_brightness > 30:
-                return GameState.RACING
 
         # Fallback: horizontal fuel gauge check (legacy)
         fuel_roi = self._crop_roi(frame, cfg.fuel_gauge_roi)
@@ -396,19 +404,22 @@ class VisionAnalyzer:
         coins = 0
         distance_m = 0.0
 
-        # Results coins
+        # Results coins (dark text on light bg -> BINARY_INV + padding)
         crop_coins = self._crop_roi(frame, cfg.results_coins_roi)
         if crop_coins is not None and crop_coins.size > 0:
             gray = cv2.cvtColor(crop_coins, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
-            scaled = cv2.resize(thresh, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+            _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY_INV)
+            padded = cv2.copyMakeBorder(thresh, 20, 20, 20, 20,
+                                        cv2.BORDER_CONSTANT, value=0)
+            scaled = cv2.resize(padded, None, fx=2, fy=2,
+                                interpolation=cv2.INTER_LINEAR)
             text = self._run_ocr(scaled)
             text_clean = text.strip().replace(",", "").replace(" ", "")
             digits = re.search(r"(\d+)", text_clean)
             if digits:
                 coins = int(digits.group(1))
 
-        # Results distance
+        # Results distance (white text with dark outline on grey bg)
         crop_dist = self._crop_roi(frame, cfg.results_distance_roi)
         if crop_dist is not None and crop_dist.size > 0:
             distance_m = self._ocr_distance_from_crop(crop_dist)

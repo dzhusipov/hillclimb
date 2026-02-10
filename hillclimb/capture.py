@@ -29,10 +29,13 @@ class ScreenCapture:
     # ------------------------------------------------------------------
 
     def grab(self) -> np.ndarray:
-        """Return a BGR numpy frame of the scrcpy window.
+        """Return a BGR numpy frame.
 
-        Tries mss first (fast, ~5 ms), falls back to ADB screencap (~200 ms).
+        Uses cfg.capture_method: "adb" for native resolution (2340x1080),
+        "mss" for scrcpy window capture (fast but scaled).
         """
+        if cfg.capture_method == "adb":
+            return self._grab_adb()
         frame = self._grab_mss()
         if frame is not None:
             return frame
@@ -86,7 +89,7 @@ class ScreenCapture:
     def _grab_adb() -> np.ndarray:
         """Capture via `adb exec-out screencap -p`. Slow but reliable."""
         device_args = ["-s", cfg.adb_device] if cfg.adb_device else []
-        cmd = ["adb"] + device_args + ["exec-out", "screencap", "-p"]
+        cmd = [cfg.adb_path] + device_args + ["exec-out", "screencap", "-p"]
         raw = subprocess.check_output(cmd)
         arr = np.frombuffer(raw, dtype=np.uint8)
         frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
