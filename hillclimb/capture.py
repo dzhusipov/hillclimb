@@ -90,12 +90,21 @@ class ScreenCapture:
         """Capture via `adb exec-out screencap -p`. Slow but reliable."""
         device_args = ["-s", cfg.adb_device] if cfg.adb_device else []
         cmd = [cfg.adb_path] + device_args + ["exec-out", "screencap", "-p"]
-        raw = subprocess.check_output(cmd)
-        arr = np.frombuffer(raw, dtype=np.uint8)
-        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if frame is None:
-            raise RuntimeError("ADB screencap returned invalid image data")
-        return frame
+        for attempt in range(3):
+            try:
+                raw = subprocess.check_output(cmd, timeout=10)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                if attempt < 2:
+                    time.sleep(1.0)
+                    continue
+                raise RuntimeError("ADB screencap failed after 3 attempts")
+            arr = np.frombuffer(raw, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame is not None:
+                return frame
+            if attempt < 2:
+                time.sleep(0.5)
+        raise RuntimeError("ADB screencap returned invalid image data after 3 attempts")
 
     # ------------------------------------------------------------------
     # Convenience

@@ -9,6 +9,10 @@ from enum import IntEnum
 from hillclimb.config import cfg
 
 
+class ADBConnectionError(RuntimeError):
+    """ADB lost connection or INJECT_EVENTS permission."""
+
+
 class Action(IntEnum):
     NOTHING = 0
     GAS = 1
@@ -66,12 +70,22 @@ class ADBController:
 
     def _adb(self, *args: str) -> str:
         cmd = [cfg.adb_path] + self._device_args + ["shell"] + list(args)
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"ADB command failed: {result.stderr.strip()}")
-        return result.stdout.strip()
+        for attempt in range(3):
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            err = result.stderr.strip()
+            if "INJECT_EVENTS" in err or "SecurityException" in err:
+                if attempt < 2:
+                    time.sleep(2.0)
+                    continue
+                raise ADBConnectionError(
+                    f"ADB lost INJECT_EVENTS permission (scrcpy disconnected?): {err}"
+                )
+            raise RuntimeError(f"ADB command failed: {err}")
+        return ""  # unreachable
 
     def _verify_connection(self) -> None:
         """Check that ADB can reach the device."""

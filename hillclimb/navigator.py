@@ -39,6 +39,17 @@ class Navigator:
         self._prev_state: GameState | None = None
         self._racing_stuck_count = 0
 
+    def _save_debug_frame(self, frame: np.ndarray, label: str) -> None:
+        """Save a debug frame to logs/nav_debug/ for later analysis."""
+        import cv2
+        from pathlib import Path
+        debug_dir = Path(cfg.log_dir) / "nav_debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        ts = int(time.time())
+        path = debug_dir / f"{ts}_{label}.png"
+        cv2.imwrite(str(path), frame)
+        print(f"  [NAV] Saved debug frame: {path}")
+
     @property
     def last_results(self) -> VisionState | None:
         """Last VisionState captured on the RESULTS screen (for logging)."""
@@ -49,11 +60,15 @@ class Navigator:
         deadline = time.time() + timeout
         self._same_state_count = 0
         self._prev_state = None
+        nav_start = time.time()
 
         while time.time() < deadline:
             frame = self._cap.grab()
             state = self._vision.analyze(frame)
             gs = state.game_state
+            elapsed = time.time() - nav_start
+
+            print(f"  [NAV] {elapsed:.1f}s | state={gs.name} | stuck={self._same_state_count}")
 
             # Stuck detection: same state 3 cycles in a row → fallback tap
             if gs == self._prev_state:
@@ -63,6 +78,8 @@ class Navigator:
             self._prev_state = gs
 
             if self._same_state_count >= 3 and gs != GameState.RACING:
+                print(f"  [NAV] STUCK on {gs.name} for {self._same_state_count} cycles — fallback tap center")
+                self._save_debug_frame(frame, f"stuck_{gs.name}")
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(1.0)
                 self._same_state_count = 0
@@ -87,126 +104,93 @@ class Navigator:
 
             # Transition table
             if gs == GameState.MAIN_MENU:
-                # RACE кнопка на панели Countryside — фиксированная позиция
+                print(f"  [NAV] → tap RACE button (1860, 570)")
                 self._ctrl.tap(1860, 570)
                 time.sleep(2.0)
 
             elif gs == GameState.VEHICLE_SELECT:
+                print(f"  [NAV] → tap START ({cfg.start_button.x}, {cfg.start_button.y})")
                 self._ctrl.tap(cfg.start_button.x, cfg.start_button.y)
                 time.sleep(2.0)
-                # После START часто появляется попап (DOUBLE TOKENS/COINS)
-                # который классификатор может не распознать — закрываем превентивно
                 self._dismiss_popups()
                 time.sleep(1.5)
 
             elif gs == GameState.DOUBLE_COINS_POPUP:
+                print(f"  [NAV] → dismiss DOUBLE_COINS popup")
                 self._dismiss_popups()
                 time.sleep(2.0)
 
             elif gs == GameState.DRIVER_DOWN:
+                print(f"  [NAV] → tap center (DRIVER_DOWN)")
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(1.0)
 
             elif gs == GameState.TOUCH_TO_CONTINUE:
+                print(f"  [NAV] → tap center (TOUCH_TO_CONTINUE)")
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(1.5)
 
             elif gs == GameState.RESULTS:
-                # Capture results data before dismissing
                 self._last_results = state
+                print(f"  [NAV] → tap RETRY ({cfg.retry_button.x}, {cfg.retry_button.y})")
                 self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
                 time.sleep(2.0)
 
             elif gs == GameState.CAPTCHA:
+                print(f"  [NAV] → solving CAPTCHA...")
+                self._save_debug_frame(frame, "captcha")
                 self._solve_captcha(frame)
                 time.sleep(2.0)
 
             elif gs == GameState.UNKNOWN:
-                # Пробуем закрыть попап: X в правом верхнем углу (Special Offer и т.п.)
+                print(f"  [NAV] → UNKNOWN state — saving frame + trying X + center")
+                self._save_debug_frame(frame, "unknown")
                 self._ctrl.tap(1790, 55)
                 time.sleep(0.5)
-                # Затем центр экрана (универсальный fallback)
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(1.0)
 
         return False
 
     def _solve_captcha(self, frame: np.ndarray) -> None:
-        """Пройти проверку 'ARE YOU A ROBOT?': чекбокс → OK, повторяем пока не уйдёт."""
-        import cv2
+        """Обойти проверку 'ARE YOU A ROBOT?'.
 
-        for attempt in range(5):
-            h, w = frame.shape[:2]
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        Капча — overlay от другого процесса, ADB input tap не может до неё
+        достучаться (INJECT_EVENTS permission). Решение: BACK → перезапуск игры.
+        """
+        import subprocess
 
-            # Способ 1: самый большой белый квадрат с тёмным внутри
-            _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        print("  [CAPTCHA] Captcha detected — pressing BACK to dismiss")
+        # BACK закрывает overlay капчи
+        subprocess.run(
+            [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_BACK"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(1.0)
 
-            checkbox_pos = None
-            best_area = 0
-            for cnt in contours:
-                x, y, cw, ch = cv2.boundingRect(cnt)
-                if 30 < cw < 120 and 30 < ch < 120 and 0.7 < cw / ch < 1.4:
-                    inner = gray[y + 5 : y + ch - 5, x + 5 : x + cw - 5]
-                    if inner.size > 0 and np.mean(inner) < 80 and cw * ch > best_area:
-                        best_area = cw * ch
-                        checkbox_pos = (x + cw // 2, y + ch // 2)
+        # Проверяем — ушла ли капча?
+        frame2 = self._cap.grab()
+        state = self._vision.analyze(frame2)
+        if state.game_state != GameState.CAPTCHA:
+            print(f"  [CAPTCHA] BACK worked! state: {state.game_state.name}")
+            return
 
-            # Способ 2 (fallback): первый белый блок в средней зоне
-            #   Чекбокс = левый край первого кластера белых пикселей
-            #   (белая рамка чекбокса или начало "I am not a robot")
-            if checkbox_pos is None:
-                mid_zone = gray[int(h * 0.30) : int(h * 0.55), :]
-                white_mask = mid_zone > 180
-                rows_w, cols_w = np.where(white_mask)
-                if len(cols_w) > 0:
-                    col_counts = np.bincount(cols_w, minlength=w)
-                    in_block = False
-                    for c in range(w):
-                        if col_counts[c] >= 3 and not in_block:
-                            block_start = c
-                            in_block = True
-                        elif col_counts[c] < 3 and in_block:
-                            if c - block_start > 5:
-                                blk_rows = rows_w[
-                                    (cols_w >= block_start) & (cols_w < block_start + 40)]
-                                # Верхний край + 40px = центр чекбокса
-                                cy = (int(np.min(blk_rows)) + int(h * 0.30) + 40
-                                      if len(blk_rows) > 0 else int(h * 0.40))
-                                checkbox_pos = (block_start + 30, cy)
-                                break
-                            in_block = False
+        # BACK не помог — HOME + перезапуск игры
+        print("  [CAPTCHA] BACK didn't work — HOME + relaunch")
+        subprocess.run(
+            [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_HOME"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(2.0)
 
-            if checkbox_pos:
-                self._ctrl.tap(checkbox_pos[0], checkbox_pos[1])
-            else:
-                # Не нашли — тапаем примерное место чекбокса
-                self._ctrl.tap(w // 2, int(h * 0.3))
-            time.sleep(1.5)
-
-            # Ищем зелёную кнопку OK и тапаем
-            frame2 = self._cap.grab()
-            hsv2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV)
-            green_mask = cv2.inRange(hsv2,
-                                      np.array([35, 80, 80], dtype=np.uint8),
-                                      np.array([85, 255, 255], dtype=np.uint8))
-            contours_g, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for cnt in sorted(contours_g, key=cv2.contourArea, reverse=True):
-                x, y, gw, gh = cv2.boundingRect(cnt)
-                if gw > 50 and gh > 20:
-                    self._ctrl.tap(x + gw // 2, y + gh // 2)
-                    break
-            else:
-                # Нет зелёной кнопки — тапаем центр-низ
-                self._ctrl.tap(cfg.center_screen.x, int(h * 0.7))
-            time.sleep(2.0)
-
-            # Проверяем: ушла ли капча?
-            frame = self._cap.grab()
-            state = self._vision.analyze(frame)
-            if state.game_state != GameState.CAPTCHA:
-                return
+        # Перезапускаем HCR2
+        subprocess.run(
+            [cfg.adb_path, "shell", "monkey", "-p", "com.fingersoft.hcr2",
+             "-c", "android.intent.category.LAUNCHER", "1"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(5.0)
+        print("  [CAPTCHA] Game relaunched")
 
     def _fling(self) -> None:
         """Свайп вниз-вверх для 'fling' промо в Adventures (оттянуть и отпустить)."""

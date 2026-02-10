@@ -130,7 +130,7 @@ class Config:
     model_dir: str = "models"
     learning_rate: float = 3e-4
     batch_size: int = 64
-    n_steps: int = 2048
+    n_steps: int = 64
     total_timesteps: int = 200_000
 
     # -- Template paths -------------------------------------------------------

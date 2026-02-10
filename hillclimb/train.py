@@ -119,7 +119,7 @@ def train(
 
     print(f"Training for {total_timesteps} timesteps (n_steps={n_steps})")
     print(f"Config: lr={cfg.learning_rate}, batch={min(cfg.batch_size, n_steps)}")
-    print(f"Actions: MultiDiscrete([3, 5]) — тип × длительность [100,200,400,700,1100]мс")
+    print(f"Actions: MultiDiscrete([2, 5]) — gas/brake × длительность [200,500,1000,2000,3000]мс")
     print("-" * 70)
 
     save_path = model_dir / "ppo_hillclimb"
@@ -133,6 +133,9 @@ def train(
         print("\nTraining complete.")
     except KeyboardInterrupt:
         print("\n\nCtrl+C — saving model before exit...")
+    except Exception as exc:
+        print(f"\n\nTraining crashed: {exc}")
+        print("Saving model before exit...")
 
     model.save(str(save_path))
     print(f"Model saved to {save_path}")

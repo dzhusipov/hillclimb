@@ -163,10 +163,25 @@ class VisionAnalyzer:
         if orange_ratio > 0.05 and dark_ratio > 0.3:
             return GameState.DRIVER_DOWN
 
-        # 2. TOUCH_TO_CONTINUE: dark overlay with text at bottom
-        #    Similar dark overlay but no orange burst; text prompt at bottom
+        # 1b. OUT OF FUEL: red text/cans in upper half + white "TOUCH TO CONTINUE" bottom
+        #     Screen is BRIGHT (unlike DRIVER_DOWN dark overlay)
         bottom_strip = hsv[int(h * 0.8):, w // 4 : 3 * w // 4]
         bottom_white = np.mean(bottom_strip[:, :, 2] > 180)
+        upper_half = hsv[:h // 2, w // 4 : 3 * w // 4]
+        red_mask = (
+            cv2.inRange(upper_half,
+                        np.array([0, 100, 100], dtype=np.uint8),
+                        np.array([10, 255, 255], dtype=np.uint8))
+            | cv2.inRange(upper_half,
+                          np.array([160, 100, 100], dtype=np.uint8),
+                          np.array([180, 255, 255], dtype=np.uint8))
+        )
+        red_upper = np.mean(red_mask > 0)
+        if red_upper > 0.06 and bottom_white > 0.04:
+            return GameState.TOUCH_TO_CONTINUE
+
+        # 2. TOUCH_TO_CONTINUE: dark overlay with text at bottom
+        #    Similar dark overlay but no orange burst; text prompt at bottom
         if dark_ratio > 0.4 and bottom_white > 0.05 and orange_ratio < 0.03:
             return GameState.TOUCH_TO_CONTINUE
 

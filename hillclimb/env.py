@@ -10,12 +10,15 @@ from gymnasium import spaces
 
 from hillclimb.capture import ScreenCapture
 from hillclimb.config import cfg
-from hillclimb.controller import ADBController, Action
+from hillclimb.controller import ADBConnectionError, ADBController, Action
 from hillclimb.navigator import Navigator
 from hillclimb.vision import GameState, VisionAnalyzer, VisionState
 
 # Длительности удержания (мс) — модель выбирает одну из них
-HOLD_DURATIONS = [100, 200, 400, 700, 1100]
+HOLD_DURATIONS = [200, 500, 1000, 2000, 3000]
+
+# Действия: 0=gas, 1=brake (без NOTHING — газ нужен почти всегда)
+ACTION_MAP = [Action.GAS, Action.BRAKE]
 
 
 class HillClimbEnv(gym.Env):
@@ -25,15 +28,14 @@ class HillClimbEnv(gym.Env):
         [fuel, rpm, boost, tilt_norm, terrain_slope_norm,
          airborne, speed_estimate, distance_norm]
 
-    Action: MultiDiscrete([3, 5])
-        dim 0: тип действия — 0=nothing, 1=gas, 2=brake
+    Action: MultiDiscrete([2, 5])
+        dim 0: тип действия — 0=gas, 1=brake
         dim 1: длительность удержания — индекс в HOLD_DURATIONS
-               [100ms, 200ms, 400ms, 700ms, 1100ms]
+               [200ms, 500ms, 1000ms, 2000ms, 3000ms]
 
     Reward:
         +0.1 * distance_delta_m  (actual metres gained)
         -10.0 if crashed (DRIVER_DOWN)
-        -0.1 * fuel_consumed
         +0.5 if moving with fuel remaining
         -0.3 if extreme tilt (>45 deg)
     """
@@ -46,8 +48,8 @@ class HillClimbEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(8,), dtype=np.float32,
         )
-        # MultiDiscrete: [тип_действия (3), длительность (5)]
-        self.action_space = spaces.MultiDiscrete([3, len(HOLD_DURATIONS)])
+        # MultiDiscrete: [тип_действия (2: gas/brake), длительность (5)]
+        self.action_space = spaces.MultiDiscrete([2, len(HOLD_DURATIONS)])
         self.render_mode = render_mode
 
         self._capture = ScreenCapture()
@@ -60,6 +62,7 @@ class HillClimbEnv(gym.Env):
         self._prev_state: VisionState | None = None
         self._step_count = 0
         self._max_distance_m = 0.0
+        self._zero_speed_count = 0
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -73,10 +76,22 @@ class HillClimbEnv(gym.Env):
     ) -> tuple[np.ndarray, dict]:
         super().reset(seed=seed)
 
-        ok = self._navigator.restart_game(timeout=20.0)
-        if not ok:
-            time.sleep(2.0)
-            self._navigator.restart_game(timeout=20.0)
+        try:
+            ok = self._navigator.restart_game(timeout=20.0)
+            if not ok:
+                time.sleep(2.0)
+                self._navigator.restart_game(timeout=20.0)
+        except ADBConnectionError:
+            print("[ENV] ADB connection lost during reset — waiting 10s for recovery...")
+            time.sleep(10.0)
+            try:
+                self._controller._verify_connection()
+                self._navigator.restart_game(timeout=20.0)
+            except Exception:
+                raise ADBConnectionError(
+                    "ADB connection lost and could not recover. "
+                    "Check scrcpy and USB connection."
+                )
 
         time.sleep(0.5)
 
@@ -85,6 +100,7 @@ class HillClimbEnv(gym.Env):
         self._prev_state = state
         self._step_count = 0
         self._max_distance_m = 0.0
+        self._zero_speed_count = 0
 
         return state.to_array(), {}
 
@@ -93,27 +109,63 @@ class HillClimbEnv(gym.Env):
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
         self._step_count += 1
 
-        # Декодируем MultiDiscrete: [тип, длительность]
+        # Декодируем MultiDiscrete: [тип (0=gas,1=brake), длительность]
         action_type = int(action[0])
         hold_ms = HOLD_DURATIONS[int(action[1])]
+        actual_action = ACTION_MAP[action_type]
 
         # Удерживаем газ/тормоз на выбранную длительность
-        self._controller.execute(Action(action_type), duration_ms=hold_ms)
+        try:
+            self._controller.execute(actual_action, duration_ms=hold_ms)
+        except ADBConnectionError:
+            print("[ENV] ADB connection lost during step — ending episode")
+            obs = self._prev_state.to_array() if self._prev_state else np.zeros(8, dtype=np.float32)
+            return obs, -10.0, True, False, {
+                "game_state": "ADB_DISCONNECTED",
+                "max_distance_m": self._max_distance_m,
+                "step": self._step_count,
+            }
 
         frame = self._capture.grab()
         state = self._vision.analyze(frame)
 
-        reward = self._compute_reward(self._prev_state, state, action_type)
+        # Mid-race popup: only CAPTCHA and DOUBLE_COINS can interrupt racing
+        # without ending the episode. Everything else = race ended → terminate.
+        if state.game_state in (GameState.CAPTCHA, GameState.DOUBLE_COINS_POPUP):
+            print(f"  [ENV] Mid-race popup: {state.game_state.name} — navigating back...")
+            ok = self._navigator.ensure_racing(timeout=30.0)
+            if ok:
+                frame = self._capture.grab()
+                state = self._vision.analyze(frame)
+            else:
+                print(f"  [ENV] Could not recover from {state.game_state.name} — ending episode")
+                obs = self._prev_state.to_array() if self._prev_state else np.zeros(8, dtype=np.float32)
+                return obs, 0.0, True, False, {
+                    "game_state": state.game_state.name,
+                    "max_distance_m": self._max_distance_m,
+                    "step": self._step_count,
+                }
 
-        terminated = state.game_state in (
-            GameState.DRIVER_DOWN,
-            GameState.TOUCH_TO_CONTINUE,
-            GameState.RESULTS,
+        reward = self._compute_reward(self._prev_state, state, actual_action)
+
+        terminated = state.game_state not in (
+            GameState.RACING,
+            GameState.CAPTCHA,
+            GameState.DOUBLE_COINS_POPUP,
         )
         truncated = False
 
         if state.fuel <= 0.01 and state.speed_estimate < 0.05:
             terminated = True
+
+        # Stuck detection: if speed≈0 for 5+ steps, car is stuck → end episode
+        if state.game_state == GameState.RACING and state.speed_estimate < 0.02:
+            self._zero_speed_count += 1
+            if self._zero_speed_count >= 5:
+                print(f"  [ENV] Car stuck (speed=0 for {self._zero_speed_count} steps) — ending episode")
+                terminated = True
+        else:
+            self._zero_speed_count = 0
 
         # Трекаем максимальную дистанцию из RACING
         # Фильтр: скачок > 100м за один шаг = OCR ошибка, игнорируем
@@ -156,7 +208,7 @@ class HillClimbEnv(gym.Env):
     def _compute_reward(
         prev: VisionState | None,
         curr: VisionState,
-        action_type: int,
+        action: Action,
     ) -> float:
         reward = 0.0
 
@@ -167,7 +219,7 @@ class HillClimbEnv(gym.Env):
         if curr.game_state != GameState.RACING:
             return 0.0
 
-        # Primary: distance gained (via OCR)
+        # === Primary: distance gained (via OCR) ===
         if prev is not None and prev.distance_m > 0 and curr.distance_m > prev.distance_m:
             delta = curr.distance_m - prev.distance_m
             reward += 0.1 * delta
@@ -175,17 +227,20 @@ class HillClimbEnv(gym.Env):
             # Fallback: speed as proxy when OCR not available
             reward += 1.0 * curr.speed_estimate
 
-        # Fuel efficiency penalty
-        if prev is not None:
-            fuel_used = max(0.0, prev.fuel - curr.fuel)
-            reward -= 0.1 * fuel_used
-
-        # Bonus for moving with fuel
-        if curr.fuel > 0.0 and curr.speed_estimate > 0.1:
+        # === Bonus for forward movement ===
+        if curr.speed_estimate > 0.1:
             reward += 0.5
 
-        # Stability: penalise extreme tilt
-        if abs(curr.tilt) > 45:
-            reward -= 0.3
+        # === Tilt-based balance rewards (key for HCR2) ===
+        # Relative tilt = car tilt minus terrain slope
+        # If terrain is 30° and car is 30°, relative tilt ≈ 0 (stable)
+        # If terrain is 0° and car is 30°, relative tilt = 30° (danger)
+        relative_tilt = abs(curr.tilt - curr.terrain_slope)
+        if relative_tilt < 15:
+            reward += 0.3    # stable — parallel to ground
+        elif relative_tilt > 30:
+            reward -= 0.5    # danger zone — about to flip
+        if relative_tilt > 60:
+            reward -= 1.0    # critical — almost crashed
 
         return reward
