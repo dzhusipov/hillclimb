@@ -153,18 +153,30 @@ class Navigator:
                         best_area = cw * ch
                         checkbox_pos = (x + cw // 2, y + ch // 2)
 
-            # Способ 2 (fallback): Canny edges — квадратный контур в средней зоне
+            # Способ 2 (fallback): первый белый блок в средней зоне
+            #   Чекбокс = левый край первого кластера белых пикселей
+            #   (белая рамка чекбокса или начало "I am not a robot")
             if checkbox_pos is None:
-                edges = cv2.Canny(gray, 30, 100)
-                roi_edges = edges[h // 4 : h // 2, w // 3 : int(w * 0.55)]
-                edge_cnts, _ = cv2.findContours(
-                    roi_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                ox, oy = w // 3, h // 4
-                for cnt in sorted(edge_cnts, key=cv2.contourArea, reverse=True):
-                    x, y, cw, ch = cv2.boundingRect(cnt)
-                    if 40 < cw < 150 and 40 < ch < 150 and 0.7 < cw / ch < 1.4:
-                        checkbox_pos = (ox + x + cw // 2, oy + y + ch // 2)
-                        break
+                mid_zone = gray[int(h * 0.30) : int(h * 0.55), :]
+                white_mask = mid_zone > 180
+                rows_w, cols_w = np.where(white_mask)
+                if len(cols_w) > 0:
+                    col_counts = np.bincount(cols_w, minlength=w)
+                    in_block = False
+                    for c in range(w):
+                        if col_counts[c] >= 3 and not in_block:
+                            block_start = c
+                            in_block = True
+                        elif col_counts[c] < 3 and in_block:
+                            if c - block_start > 5:
+                                blk_rows = rows_w[
+                                    (cols_w >= block_start) & (cols_w < block_start + 40)]
+                                # Верхний край + 40px = центр чекбокса
+                                cy = (int(np.min(blk_rows)) + int(h * 0.30) + 40
+                                      if len(blk_rows) > 0 else int(h * 0.40))
+                                checkbox_pos = (block_start + 30, cy)
+                                break
+                            in_block = False
 
             if checkbox_pos:
                 self._ctrl.tap(checkbox_pos[0], checkbox_pos[1])
