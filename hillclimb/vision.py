@@ -166,17 +166,20 @@ class VisionAnalyzer:
         if green_bl > 0.08 and green_br > 0.08:
             return GameState.RESULTS
 
-        # 4. DOUBLE_COINS_POPUP: yellow SKIP button in center + darkened edges
+        # 4. DOUBLE_COINS_POPUP: жёлтая кнопка SKIP в центре + затемнение ОБОИХ краёв
+        #    (монеты на трассе тоже жёлтые, но не затемняют края экрана)
         center_region = hsv[int(h * 0.55) : int(h * 0.75),
                             int(w * 0.3) : int(w * 0.6)]
         yellow_lower = np.array([18, 100, 150], dtype=np.uint8)
         yellow_upper = np.array([35, 255, 255], dtype=np.uint8)
         yellow_mask = cv2.inRange(center_region, yellow_lower, yellow_upper)
         yellow_ratio = np.mean(yellow_mask > 0)
-        # Darkened right edge (popup overlay)
+        # Попап затемняет ОБА края экрана
         right_edge = hsv[h // 4 : 3 * h // 4, 5 * w // 6 :]
-        dark_edge = np.mean(right_edge[:, :, 2] < 80)
-        if yellow_ratio > 0.07 and dark_edge > 0.10:
+        left_edge = hsv[h // 4 : 3 * h // 4, : w // 6]
+        dark_right = np.mean(right_edge[:, :, 2] < 80)
+        dark_left = np.mean(left_edge[:, :, 2] < 80)
+        if yellow_ratio > 0.07 and dark_right > 0.3 and dark_left > 0.3:
             return GameState.DOUBLE_COINS_POPUP
 
         # 5. VEHICLE_SELECT: START button bottom-right + BACK button bottom-left

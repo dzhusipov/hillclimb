@@ -46,8 +46,8 @@ class ADBController:
             self._hold(cfg.brake_button.x, cfg.brake_button.y, duration_ms)
 
     def tap(self, x: int, y: int) -> None:
-        """Single tap at (x, y)."""
-        self._adb("input", "tap", str(x), str(y))
+        """Single tap at (x, y) via short swipe (обход проблемы input tap в HCR2)."""
+        self._hold(x, y, 50)
 
     def hold(self, x: int, y: int, duration_ms: int) -> None:
         """Long press at (x, y) for duration_ms."""

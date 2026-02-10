@@ -64,7 +64,7 @@ class Config:
 
     # -- Navigation buttons (2340x1080 landscape) ----------------------------
     race_button: Point = field(default_factory=lambda: Point(x=1170, y=900))
-    start_button: Point = field(default_factory=lambda: Point(x=2100, y=950))
+    start_button: Point = field(default_factory=lambda: Point(x=2088, y=976))
     back_button: Point = field(default_factory=lambda: Point(x=200, y=950))
     skip_button: Point = field(default_factory=lambda: Point(x=870, y=875))
     close_popup_button: Point = field(default_factory=lambda: Point(x=1170, y=600))
