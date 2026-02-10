@@ -134,20 +134,21 @@ class VisionAnalyzer:
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # 0. CAPTCHA: "ARE YOU A ROBOT?" — тёмный экран, серый робот, чекбокс
-        #    Верхняя часть: белый текст на тёмном фоне, центр: металлический серый
-        top_strip = hsv[:h // 6, w // 4 : 3 * w // 4]
-        top_dark = np.mean(top_strip[:, :, 2] < 80)
-        # Центральная часть — серый металл (low saturation, medium value)
-        center_gray = hsv[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
-        gray_metal = np.mean(
-            (center_gray[:, :, 1] < 50) & (center_gray[:, :, 2] > 60) &
-            (center_gray[:, :, 2] < 180)
-        )
-        # Белый текст сверху
-        top_white = np.mean(top_strip[:, :, 2] > 200)
-        if top_dark > 0.5 and gray_metal > 0.2 and top_white > 0.05:
-            return GameState.CAPTCHA
+        # 0. CAPTCHA: "ARE YOU A ROBOT?" — попап с роботом
+        #    Верхние 8%: тёмная полоса с ярким белым текстом "ARE YOU A ROBOT?"
+        #    Боковые края затемнены (попап перекрывает игру)
+        #    Отличие от DRIVER_DOWN: нет оранжевого, центр НЕ тёмный (робот виден)
+        top_8 = hsv[:int(h * 0.08), :]
+        t8_dark = np.mean(top_8[:, :, 2] < 80)
+        t8_white = np.mean(top_8[:, :, 2] > 180)
+        if t8_dark > 0.4 and t8_white > 0.03:
+            # Подтверждаем: боковые края тоже тёмные
+            left_e = hsv[:, :int(w * 0.1)]
+            right_e = hsv[:, int(w * 0.9):]
+            edges_dark = (np.mean(left_e[:, :, 2] < 80) +
+                          np.mean(right_e[:, :, 2] < 80)) / 2
+            if edges_dark > 0.3:
+                return GameState.CAPTCHA
 
         # 1. DRIVER_DOWN: orange star burst in upper-center area
         #    Screen has dark overlay + orange/yellow "DRIVER DOWN" text
