@@ -33,8 +33,16 @@ class Point:
     y: int = 0
 
 
+@dataclass
+class CircleROI:
+    """Circular region defined by center (cx, cy) and radius."""
+    cx: int = 0
+    cy: int = 0
+    radius: int = 50
+
+
 # ---------------------------------------------------------------------------
-# Default configuration (Galaxy S-series ~1080x2400 in landscape via scrcpy)
+# Default configuration (Redmi Note 8 Pro 2340x1080 landscape via scrcpy)
 # Adjust via calibrate.py or by editing config.json
 # ---------------------------------------------------------------------------
 
@@ -46,19 +54,47 @@ class Config:
     # -- ADB ------------------------------------------------------------------
     adb_device: str = ""  # empty = first connected device
 
-    # -- Button positions (in Android screen coords, landscape) ---------------
+    # -- Gas / Brake (in Android screen coords, landscape) --------------------
     gas_button: Point = field(default_factory=lambda: Point(x=2200, y=900))
     brake_button: Point = field(default_factory=lambda: Point(x=200, y=900))
 
-    # -- Menu buttons ---------------------------------------------------------
-    play_button: Point = field(default_factory=lambda: Point(x=1200, y=800))
-    retry_button: Point = field(default_factory=lambda: Point(x=1200, y=700))
+    # -- Navigation buttons (2340x1080 landscape) ----------------------------
+    race_button: Point = field(default_factory=lambda: Point(x=1170, y=900))
+    start_button: Point = field(default_factory=lambda: Point(x=2100, y=950))
+    back_button: Point = field(default_factory=lambda: Point(x=200, y=950))
+    skip_button: Point = field(default_factory=lambda: Point(x=1170, y=750))
+    close_popup_button: Point = field(default_factory=lambda: Point(x=1170, y=600))
+    retry_button: Point = field(default_factory=lambda: Point(x=600, y=950))
+    next_button: Point = field(default_factory=lambda: Point(x=1750, y=950))
+    center_screen: Point = field(default_factory=lambda: Point(x=1170, y=540))
 
-    # -- Gauge ROIs (in scrcpy window pixel coords) ---------------------------
+    # -- Legacy aliases (kept for controller.py compatibility) -----------------
+    play_button: Point = field(default_factory=lambda: Point(x=1170, y=900))
+
+    # -- Dial gauge ROIs (circular, in scrcpy window pixel coords) ------------
+    rpm_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1050, cy=980, radius=60))
+    boost_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1290, cy=980, radius=60))
+
+    # -- Needle colour (red, wraps around H=0/180 in OpenCV HSV) --------------
+    needle_hsv_lower1: list[int] = field(default_factory=lambda: [0, 100, 100])
+    needle_hsv_upper1: list[int] = field(default_factory=lambda: [10, 255, 255])
+    needle_hsv_lower2: list[int] = field(default_factory=lambda: [170, 100, 100])
+    needle_hsv_upper2: list[int] = field(default_factory=lambda: [180, 255, 255])
+
+    # -- Needle angle calibration (degrees, 0=right, CCW positive) ------------
+    needle_min_angle: float = -135.0   # gauge reads 0%
+    needle_max_angle: float = -45.0    # gauge reads 100%
+
+    # -- Gauge ROIs (horizontal bars — kept for fuel, legacy) -----------------
     fuel_gauge_roi: Rect = field(default_factory=lambda: Rect(x=50, y=10, w=200, h=20))
-    # RPM and boost may not always be visible; these are optional
     rpm_gauge_roi: Rect = field(default_factory=lambda: Rect(x=300, y=10, w=150, h=20))
     boost_gauge_roi: Rect = field(default_factory=lambda: Rect(x=500, y=10, w=150, h=20))
+
+    # -- OCR ROIs -------------------------------------------------------------
+    distance_text_roi: Rect = field(default_factory=lambda: Rect(x=1050, y=880, w=230, h=50))
+    coins_text_roi: Rect = field(default_factory=lambda: Rect(x=50, y=20, w=200, h=40))
+    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=900, y=350, w=300, h=50))
+    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=900, y=450, w=300, h=50))
 
     # -- Vehicle ROI (where the car typically sits) ---------------------------
     vehicle_roi: Rect = field(default_factory=lambda: Rect(x=200, y=300, w=400, h=200))
@@ -66,8 +102,7 @@ class Config:
     # -- Terrain ROI (ground line area) ---------------------------------------
     terrain_roi: Rect = field(default_factory=lambda: Rect(x=0, y=400, w=800, h=200))
 
-    # -- HSV ranges for gauge bar color detection ----------------------------
-    # Default: greenish fuel bar — tune after calibration
+    # -- HSV ranges for gauge bar colour detection ----------------------------
     fuel_hsv_lower: list[int] = field(default_factory=lambda: [30, 80, 80])
     fuel_hsv_upper: list[int] = field(default_factory=lambda: [90, 255, 255])
 
@@ -95,6 +130,10 @@ class Config:
     # -- Template paths -------------------------------------------------------
     template_dir: str = str(Path(__file__).resolve().parent.parent / "templates")
 
+    # -- OCR ------------------------------------------------------------------
+    tesseract_cmd: str = "/opt/homebrew/bin/tesseract"
+    ocr_backend: str = "tesseract"  # or "easyocr"
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
@@ -120,6 +159,8 @@ class Config:
                 setattr(cfg, key, Point(**value))
             elif isinstance(field_val, Rect):
                 setattr(cfg, key, Rect(**value))
+            elif isinstance(field_val, CircleROI):
+                setattr(cfg, key, CircleROI(**value))
             else:
                 setattr(cfg, key, value)
         return cfg

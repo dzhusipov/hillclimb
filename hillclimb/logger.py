@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import os
 import time
 from pathlib import Path
 from threading import Thread
@@ -30,7 +29,8 @@ class Logger:
         self._writer = csv.writer(self._csv_file)
         self._writer.writerow([
             "timestamp", "game_state", "fuel", "rpm", "boost",
-            "tilt", "terrain_slope", "airborne", "speed_estimate", "action",
+            "tilt", "terrain_slope", "airborne", "speed_estimate",
+            "distance_m", "coins", "action",
         ])
 
     def log(
@@ -52,17 +52,41 @@ class Logger:
             f"{state.terrain_slope:.2f}",
             int(state.airborne),
             f"{state.speed_estimate:.4f}",
+            f"{state.distance_m:.1f}",
+            state.coins,
             int(action),
         ])
 
-        # Flush periodically
         if self._frame_count % 10 == 0:
             self._csv_file.flush()
 
-        # Save frame every N steps
         if frame is not None and self._frame_count % cfg.log_frame_every_n == 0:
             path = self._dir / f"frame_{self._frame_count:06d}.png"
             Thread(target=cv2.imwrite, args=(str(path), frame), daemon=True).start()
+
+    def log_episode_summary(
+        self,
+        episode: int,
+        steps: int,
+        results_coins: int = 0,
+        results_distance_m: float = 0.0,
+    ) -> None:
+        """Write a summary row for the completed episode."""
+        self._writer.writerow([
+            time.time(),
+            f"EPISODE_{episode}_SUMMARY",
+            "",  # fuel
+            "",  # rpm
+            "",  # boost
+            "",  # tilt
+            "",  # terrain_slope
+            "",  # airborne
+            "",  # speed_estimate
+            f"{results_distance_m:.1f}",
+            results_coins,
+            steps,
+        ])
+        self._csv_file.flush()
 
     def close(self) -> None:
         self._csv_file.close()

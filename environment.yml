@@ -13,3 +13,4 @@ dependencies:
     - mss>=9.0
     - stable-baselines3>=2.3
     - gymnasium>=0.29
+    - pytesseract>=0.3.10

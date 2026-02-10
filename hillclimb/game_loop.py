@@ -1,4 +1,4 @@
-"""Main game loop: capture → vision → agent → controller."""
+"""Main game loop: capture -> vision -> agent -> controller."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from hillclimb.vision import GameState, VisionAnalyzer
 
 
 class GameLoop:
-    """Orchestrates the capture → CV → decision → input cycle."""
+    """Orchestrates the capture -> CV -> decision -> input cycle."""
 
     def __init__(self, agent: object, headless: bool = False) -> None:
         self._capture = ScreenCapture()
@@ -56,36 +56,59 @@ class GameLoop:
                     time.sleep(2.0)
                     continue
 
-                steps = self._run_episode(logger)
+                steps = self._run_episode(logger, episode)
                 total_steps += steps
-                print(f"Episode {episode} ended after {steps} steps")
+
+                # Log episode summary with results data
+                last_results = self._navigator.last_results
+                if last_results is not None:
+                    logger.log_episode_summary(
+                        episode=episode,
+                        steps=steps,
+                        results_coins=last_results.results_coins,
+                        results_distance_m=last_results.results_distance_m,
+                    )
+                    print(
+                        f"Episode {episode}: {steps} steps, "
+                        f"dist={last_results.results_distance_m:.0f}m, "
+                        f"coins={last_results.results_coins}"
+                    )
+                else:
+                    logger.log_episode_summary(episode=episode, steps=steps)
+                    print(f"Episode {episode} ended after {steps} steps")
 
                 if max_steps and total_steps >= max_steps:
                     break
 
         print(f"Finished: {episode} episodes, {total_steps} total steps")
 
-    def _run_episode(self, logger: Logger) -> int:
-        """Run a single episode until crash or fuel empty. Returns step count."""
+    def _run_episode(self, logger: Logger, episode: int) -> int:
+        """Run a single episode until crash/results/fuel empty. Returns step count."""
         step = 0
         while self._running:
             t0 = time.time()
 
             frame = self._capture.grab()
             state = self._vision.analyze(frame)
+            gs = state.game_state
 
             # Episode end conditions
-            if state.game_state == GameState.CRASHED:
+            if gs == GameState.DRIVER_DOWN:
                 logger.log(state, Action.NOTHING, frame)
-                print(f"  CRASHED at step {step}")
+                print(f"  DRIVER DOWN at step {step}")
                 return step
 
-            if state.game_state == GameState.RESULTS:
+            if gs == GameState.TOUCH_TO_CONTINUE:
+                logger.log(state, Action.NOTHING, frame)
+                print(f"  TOUCH TO CONTINUE at step {step}")
+                return step
+
+            if gs == GameState.RESULTS:
                 logger.log(state, Action.NOTHING, frame)
                 print(f"  RESULTS at step {step}")
                 return step
 
-            if state.game_state != GameState.RACING:
+            if gs != GameState.RACING:
                 # Unexpected state — try to recover
                 self._navigator.ensure_racing(timeout=5.0)
                 continue
@@ -105,7 +128,7 @@ class GameLoop:
                 import cv2
                 debug = self._vision.draw_debug(frame, state)
                 action_name = Action(action).name
-                cv2.putText(debug, f"Action: {action_name}", (10, 210),
+                cv2.putText(debug, f"Action: {action_name}", (10, 300),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                 cv2.imshow("hillclimb", debug)
                 if cv2.waitKey(1) & 0xFF == ord("q"):

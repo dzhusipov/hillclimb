@@ -1,4 +1,4 @@
-"""Gymnasium environment wrapping the real Hill Climb Racing game."""
+"""Gymnasium environment wrapping the real Hill Climb Racing 2 game."""
 
 from __future__ import annotations
 
@@ -16,19 +16,21 @@ from hillclimb.vision import GameState, VisionAnalyzer, VisionState
 
 
 class HillClimbEnv(gym.Env):
-    """Gymnasium-compatible environment for Hill Climb Racing.
+    """Gymnasium-compatible environment for Hill Climb Racing 2.
 
-    Observation: 7-dim float32 vector
-        [fuel, rpm, boost, tilt_norm, terrain_slope_norm, airborne, speed_estimate]
+    Observation: 8-dim float32 vector
+        [fuel, rpm, boost, tilt_norm, terrain_slope_norm,
+         airborne, speed_estimate, distance_norm]
 
     Action: Discrete(3)
         0 = nothing, 1 = gas, 2 = brake
 
     Reward:
-        +1.0 * delta_distance (speed_estimate as proxy)
-        -10.0 if crashed
+        +0.1 * distance_delta_m  (actual metres gained)
+        -10.0 if crashed (DRIVER_DOWN)
         -0.1 * fuel_consumed
         +0.5 if moving with fuel remaining
+        -0.3 if extreme tilt (>45 deg)
     """
 
     metadata = {"render_modes": ["human"]}
@@ -37,7 +39,7 @@ class HillClimbEnv(gym.Env):
         super().__init__()
 
         self.observation_space = spaces.Box(
-            low=0.0, high=1.0, shape=(7,), dtype=np.float32,
+            low=0.0, high=1.0, shape=(8,), dtype=np.float32,
         )
         self.action_space = spaces.Discrete(3)
         self.render_mode = render_mode
@@ -64,14 +66,12 @@ class HillClimbEnv(gym.Env):
     ) -> tuple[np.ndarray, dict]:
         super().reset(seed=seed)
 
-        # Navigate to racing state
         ok = self._navigator.restart_game(timeout=20.0)
         if not ok:
-            # Try one more time
             time.sleep(2.0)
             self._navigator.restart_game(timeout=20.0)
 
-        time.sleep(0.5)  # let the game settle
+        time.sleep(0.5)
 
         frame = self._capture.grab()
         state = self._vision.analyze(frame)
@@ -85,36 +85,38 @@ class HillClimbEnv(gym.Env):
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
         self._step_count += 1
 
-        # Execute action
         self._controller.execute(Action(action))
-
-        # Wait for game to react
         time.sleep(cfg.loop_interval_sec)
 
-        # Observe
         frame = self._capture.grab()
         state = self._vision.analyze(frame)
 
-        # Compute reward
         reward = self._compute_reward(self._prev_state, state, action)
 
-        # Done?
-        terminated = state.game_state in (GameState.CRASHED, GameState.RESULTS)
+        terminated = state.game_state in (
+            GameState.DRIVER_DOWN,
+            GameState.TOUCH_TO_CONTINUE,
+            GameState.RESULTS,
+        )
         truncated = False
 
-        # Also terminate if fuel hits zero and we've stopped
         if state.fuel <= 0.01 and state.speed_estimate < 0.05:
             terminated = True
 
         self._prev_state = state
 
-        info = {
+        info: dict = {
             "game_state": state.game_state.name,
             "fuel": state.fuel,
+            "distance_m": state.distance_m,
             "step": self._step_count,
         }
 
-        # Render
+        # Capture results data if available
+        if state.game_state == GameState.RESULTS:
+            info["results_coins"] = state.results_coins
+            info["results_distance_m"] = state.results_distance_m
+
         if self.render_mode == "human":
             import cv2
             debug = self._vision.draw_debug(frame, state)
@@ -143,14 +145,19 @@ class HillClimbEnv(gym.Env):
         reward = 0.0
 
         # Crash penalty
-        if curr.game_state == GameState.CRASHED:
+        if curr.game_state == GameState.DRIVER_DOWN:
             return -10.0
 
         if curr.game_state != GameState.RACING:
             return 0.0
 
-        # Distance reward: use speed as proxy for forward progress
-        reward += 1.0 * curr.speed_estimate
+        # Primary: distance gained (via OCR)
+        if prev is not None and prev.distance_m > 0 and curr.distance_m > prev.distance_m:
+            delta = curr.distance_m - prev.distance_m
+            reward += 0.1 * delta
+        else:
+            # Fallback: speed as proxy when OCR not available
+            reward += 1.0 * curr.speed_estimate
 
         # Fuel efficiency penalty
         if prev is not None:
@@ -161,7 +168,7 @@ class HillClimbEnv(gym.Env):
         if curr.fuel > 0.0 and curr.speed_estimate > 0.1:
             reward += 0.5
 
-        # Stability bonus: penalise extreme tilt
+        # Stability: penalise extreme tilt
         if abs(curr.tilt) > 45:
             reward -= 0.3
 

@@ -1,17 +1,27 @@
-"""Menu navigation: auto-start races and restart after crashes."""
+"""Menu navigation: full state machine for HCR2 game cycle.
+
+Handles transitions between all 8 game states:
+    MAIN_MENU → VEHICLE_SELECT → RACING → DRIVER_DOWN →
+    TOUCH_TO_CONTINUE → RESULTS → (retry) → VEHICLE_SELECT
+Plus: DOUBLE_COINS_POPUP (skip), UNKNOWN (fallback tap).
+"""
 
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
-from hillclimb.capture import ScreenCapture
 from hillclimb.config import cfg
-from hillclimb.controller import ADBController
-from hillclimb.vision import GameState, VisionAnalyzer
+from hillclimb.vision import GameState, VisionState
+
+if TYPE_CHECKING:
+    from hillclimb.capture import ScreenCapture
+    from hillclimb.controller import ADBController
+    from hillclimb.vision import VisionAnalyzer
 
 
 class Navigator:
-    """Handles menu interactions: starting games and restarting after crash."""
+    """Handles menu interactions via a state-machine transition table."""
 
     def __init__(
         self,
@@ -22,40 +32,86 @@ class Navigator:
         self._ctrl = controller
         self._cap = capture
         self._vision = vision
+        self._last_results: VisionState | None = None
+        self._same_state_count = 0
+        self._prev_state: GameState | None = None
 
-    def ensure_racing(self, timeout: float = 15.0) -> bool:
+    @property
+    def last_results(self) -> VisionState | None:
+        """Last VisionState captured on the RESULTS screen (for logging)."""
+        return self._last_results
+
+    def ensure_racing(self, timeout: float = 20.0) -> bool:
         """Navigate from any state to RACING. Returns True if successful."""
         deadline = time.time() + timeout
+        self._same_state_count = 0
+        self._prev_state = None
 
         while time.time() < deadline:
             frame = self._cap.grab()
             state = self._vision.analyze(frame)
+            gs = state.game_state
 
-            if state.game_state == GameState.RACING:
+            # Stuck detection: same state 3 cycles in a row → fallback tap
+            if gs == self._prev_state:
+                self._same_state_count += 1
+            else:
+                self._same_state_count = 0
+            self._prev_state = gs
+
+            if self._same_state_count >= 3 and gs != GameState.RACING:
+                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
+                time.sleep(1.0)
+                self._same_state_count = 0
+                continue
+
+            # Already racing — done
+            if gs == GameState.RACING:
                 return True
 
-            if state.game_state == GameState.MENU:
-                self._ctrl.tap(cfg.play_button.x, cfg.play_button.y)
-                time.sleep(2.0)  # wait for game to load
+            # Transition table
+            if gs == GameState.MAIN_MENU:
+                self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
+                time.sleep(2.0)
 
-            elif state.game_state in (GameState.CRASHED, GameState.RESULTS):
+            elif gs == GameState.VEHICLE_SELECT:
+                self._ctrl.tap(cfg.start_button.x, cfg.start_button.y)
+                time.sleep(3.0)
+
+            elif gs == GameState.DOUBLE_COINS_POPUP:
+                self._ctrl.tap(cfg.skip_button.x, cfg.skip_button.y)
+                time.sleep(2.0)
+
+            elif gs == GameState.DRIVER_DOWN:
+                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
+                time.sleep(1.0)
+
+            elif gs == GameState.TOUCH_TO_CONTINUE:
+                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
+                time.sleep(1.5)
+
+            elif gs == GameState.RESULTS:
+                # Capture results data before dismissing
+                self._last_results = state
                 self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
                 time.sleep(2.0)
 
-            elif state.game_state == GameState.UNKNOWN:
-                # Tap centre of screen to dismiss any dialog
-                frame_h, frame_w = frame.shape[:2]
-                self._ctrl.tap(frame_w // 2, frame_h // 2)
+            elif gs == GameState.UNKNOWN:
+                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(1.0)
 
         return False
 
-    def restart_game(self, timeout: float = 15.0) -> bool:
+    def restart_game(self, timeout: float = 20.0) -> bool:
         """Restart after crash/results screen. Returns True if back to RACING."""
         return self.ensure_racing(timeout)
 
 
 def main() -> None:
+    from hillclimb.capture import ScreenCapture
+    from hillclimb.controller import ADBController
+    from hillclimb.vision import VisionAnalyzer
+
     ctrl = ADBController()
     cap = ScreenCapture()
     vis = VisionAnalyzer()
