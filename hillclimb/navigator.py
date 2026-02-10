@@ -139,7 +139,7 @@ class Navigator:
             h, w = frame.shape[:2]
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-            # Ищем чекбокс: самый большой белый квадрат с тёмным внутри
+            # Способ 1: самый большой белый квадрат с тёмным внутри
             _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -152,6 +152,19 @@ class Navigator:
                     if inner.size > 0 and np.mean(inner) < 80 and cw * ch > best_area:
                         best_area = cw * ch
                         checkbox_pos = (x + cw // 2, y + ch // 2)
+
+            # Способ 2 (fallback): Canny edges — квадратный контур в средней зоне
+            if checkbox_pos is None:
+                edges = cv2.Canny(gray, 30, 100)
+                roi_edges = edges[h // 4 : h // 2, w // 3 : int(w * 0.55)]
+                edge_cnts, _ = cv2.findContours(
+                    roi_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                ox, oy = w // 3, h // 4
+                for cnt in sorted(edge_cnts, key=cv2.contourArea, reverse=True):
+                    x, y, cw, ch = cv2.boundingRect(cnt)
+                    if 40 < cw < 150 and 40 < ch < 150 and 0.7 < cw / ch < 1.4:
+                        checkbox_pos = (ox + x + cw // 2, oy + y + ch // 2)
+                        break
 
             if checkbox_pos:
                 self._ctrl.tap(checkbox_pos[0], checkbox_pos[1])
