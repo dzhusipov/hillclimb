@@ -75,9 +75,10 @@ class Config:
     # -- Legacy aliases (kept for controller.py compatibility) -----------------
     play_button: Point = field(default_factory=lambda: Point(x=1170, y=900))
 
-    # -- Dial gauge ROIs (circular, in scrcpy window pixel coords) ------------
-    rpm_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1050, cy=980, radius=60))
-    boost_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1290, cy=980, radius=60))
+    # -- Dial gauge ROIs (circular, калиброваны для Redmi Note 8 Pro 2340x1080)
+    rpm_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=920, cy=955, radius=70))
+    fuel_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1170, cy=975, radius=70))
+    boost_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1420, cy=955, radius=70))
 
     # -- Needle colour (red, wraps around H=0/180 in OpenCV HSV) --------------
     needle_hsv_lower1: list[int] = field(default_factory=lambda: [0, 100, 100])
@@ -85,9 +86,10 @@ class Config:
     needle_hsv_lower2: list[int] = field(default_factory=lambda: [170, 100, 100])
     needle_hsv_upper2: list[int] = field(default_factory=lambda: [180, 255, 255])
 
-    # -- Needle angle calibration (degrees, 0=right, CCW positive) ------------
-    needle_min_angle: float = -135.0   # gauge reads 0%
-    needle_max_angle: float = -45.0    # gauge reads 100%
+    # -- Needle angle calibration (degrees, atan2 convention: 0=right, CCW+) --
+    # Стрелки идут по часовой от ~10 часов (150°) до ~4 часов (-30°)
+    needle_min_angle: float = 150.0    # позиция стрелки при 0% (10 часов)
+    needle_max_angle: float = -30.0    # позиция стрелки при 100% (4 часа)
 
     # -- Gauge ROIs (horizontal bars — kept for fuel, legacy) -----------------
     fuel_gauge_roi: Rect = field(default_factory=lambda: Rect(x=50, y=10, w=200, h=20))
@@ -95,7 +97,7 @@ class Config:
     boost_gauge_roi: Rect = field(default_factory=lambda: Rect(x=500, y=10, w=150, h=20))
 
     # -- OCR ROIs (calibrated for Redmi Note 8 Pro results screen) -----------
-    distance_text_roi: Rect = field(default_factory=lambda: Rect(x=1050, y=880, w=230, h=50))
+    distance_text_roi: Rect = field(default_factory=lambda: Rect(x=1130, y=840, w=160, h=45))
     coins_text_roi: Rect = field(default_factory=lambda: Rect(x=780, y=710, w=140, h=80))
     results_coins_roi: Rect = field(default_factory=lambda: Rect(x=780, y=710, w=140, h=80))
     results_distance_roi: Rect = field(default_factory=lambda: Rect(x=1200, y=710, w=320, h=80))

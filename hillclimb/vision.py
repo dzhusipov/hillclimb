@@ -108,11 +108,9 @@ class VisionAnalyzer:
                 frame, cfg.rpm_dial_roi, self._rpm_buf)
             state.boost = self._read_dial_gauge(
                 frame, cfg.boost_dial_roi, self._boost_buf)
-            # Fuel: keep horizontal bar reader (fuel bar is still horizontal in HCR2)
-            state.fuel = self._read_gauge(
-                frame, cfg.fuel_gauge_roi,
-                cfg.fuel_hsv_lower, cfg.fuel_hsv_upper,
-                self._fuel_buf)
+            # Fuel — тоже циферблат в HCR2 (центральный)
+            state.fuel = self._read_dial_gauge(
+                frame, cfg.fuel_dial_roi, self._fuel_buf)
             state.tilt = self._detect_tilt(frame)
             state.terrain_slope = self._detect_terrain_slope(frame)
             state.airborne = self._detect_airborne(frame)
@@ -307,13 +305,16 @@ class VisionAnalyzer:
         angle_rad = math.atan2(-mean_y, mean_x)
         angle_deg = math.degrees(angle_rad)
 
-        # Map angle to 0..1 via calibrated min/max
-        min_a = cfg.needle_min_angle
-        max_a = cfg.needle_max_angle
-        if abs(max_a - min_a) < 1.0:
+        # Маппинг угла в 0..1 (стрелка идёт по часовой: min→max)
+        # Используем модулярную арифметику для обхода разрыва atan2 при ±180°
+        min_a = cfg.needle_min_angle   # atan2 угол при 0% (напр. 150° = 10 часов)
+        max_a = cfg.needle_max_angle   # atan2 угол при 100% (напр. -30° = 4 часа)
+        total_sweep = (min_a - max_a) % 360  # полный ход стрелки по часовой
+        if total_sweep < 1.0:
             fill = 0.5
         else:
-            fill = (angle_deg - min_a) / (max_a - min_a)
+            cw_from_min = (min_a - angle_deg) % 360  # угол по часовой от min
+            fill = cw_from_min / total_sweep
 
         fill = float(np.clip(fill, 0.0, 1.0))
         buf.append(fill)
@@ -371,11 +372,20 @@ class VisionAnalyzer:
         return self._ocr_distance_from_crop(crop)
 
     def _ocr_distance_from_crop(self, crop: np.ndarray) -> float:
-        """Extract distance value from a cropped image region."""
-        # Preprocess: grayscale -> threshold (white text on dark bg) -> scale up
+        """Извлечь дистанцию из кропа текста.
+
+        Игровой шрифт HCR2 — жирный курсив с неоднородной яркостью.
+        Порог ~158, морфология open (убрать шум), инверсия для Tesseract.
+        """
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
-        scaled = cv2.resize(thresh, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+        _, thresh = cv2.threshold(gray, 158, 255, cv2.THRESH_BINARY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        inv = cv2.bitwise_not(cleaned)
+        padded = cv2.copyMakeBorder(inv, 20, 20, 20, 20,
+                                     cv2.BORDER_CONSTANT, value=255)
+        scaled = cv2.resize(padded, None, fx=2, fy=2,
+                            interpolation=cv2.INTER_LINEAR)
 
         text = self._run_ocr(scaled)
         return self._parse_distance(text)
@@ -660,6 +670,7 @@ class VisionAnalyzer:
         # Draw dial ROI circles
         for label, droi in [
             ("RPM", cfg.rpm_dial_roi),
+            ("Fuel", cfg.fuel_dial_roi),
             ("Boost", cfg.boost_dial_roi),
         ]:
             cv2.circle(out, (droi.cx, droi.cy), droi.radius, (0, 255, 255), 1)
