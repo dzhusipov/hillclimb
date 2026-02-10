@@ -35,6 +35,7 @@ class Navigator:
         self._last_results: VisionState | None = None
         self._same_state_count = 0
         self._prev_state: GameState | None = None
+        self._racing_stuck_count = 0
 
     @property
     def last_results(self) -> VisionState | None:
@@ -67,19 +68,37 @@ class Navigator:
 
             # Already racing — done
             if gs == GameState.RACING:
+                # Проверяем "fling" промо: рука на экране, машина стоит
+                # Если speed ≈ 0 несколько циклов подряд → свайп (оттянуть и отпустить)
+                try:
+                    speed = float(state.speed_estimate)
+                except (TypeError, ValueError):
+                    speed = 1.0
+                if speed < 0.02:
+                    self._racing_stuck_count += 1
+                else:
+                    self._racing_stuck_count = 0
+                if self._racing_stuck_count >= 2:
+                    self._fling()
+                    self._racing_stuck_count = 0
                 return True
 
             # Transition table
             if gs == GameState.MAIN_MENU:
-                self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
+                # RACE кнопка на панели Countryside — фиксированная позиция
+                self._ctrl.tap(1860, 570)
                 time.sleep(2.0)
 
             elif gs == GameState.VEHICLE_SELECT:
                 self._ctrl.tap(cfg.start_button.x, cfg.start_button.y)
-                time.sleep(3.0)
+                time.sleep(2.0)
+                # После START часто появляется попап (DOUBLE TOKENS/COINS)
+                # который классификатор может не распознать — закрываем превентивно
+                self._dismiss_popups()
+                time.sleep(1.5)
 
             elif gs == GameState.DOUBLE_COINS_POPUP:
-                self._ctrl.tap(cfg.skip_button.x, cfg.skip_button.y)
+                self._dismiss_popups()
                 time.sleep(2.0)
 
             elif gs == GameState.DRIVER_DOWN:
@@ -97,10 +116,39 @@ class Navigator:
                 time.sleep(2.0)
 
             elif gs == GameState.UNKNOWN:
+                # Пробуем закрыть попап: X в правом верхнем углу (Special Offer и т.п.)
+                self._ctrl.tap(1790, 55)
+                time.sleep(0.5)
+                # Затем центр экрана (универсальный fallback)
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(1.0)
 
         return False
+
+    def _fling(self) -> None:
+        """Свайп вниз-вверх для 'fling' промо в Adventures (оттянуть и отпустить)."""
+        import subprocess
+        # Свайп вниз от центра машины (оттягиваем)
+        subprocess.run(
+            [cfg.adb_path, "shell", "input", "swipe",
+             "1170", "400", "1170", "700", "300"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(0.1)
+        # Свайп вверх (отпускаем — запуск)
+        subprocess.run(
+            [cfg.adb_path, "shell", "input", "swipe",
+             "1170", "700", "1170", "300", "150"],
+            capture_output=True, timeout=5,
+        )
+
+    def _dismiss_popups(self) -> None:
+        """Закрыть попапы SKIP в обеих известных позициях."""
+        # DOUBLE COINS — жёлтый SKIP
+        self._ctrl.tap(cfg.skip_button.x, cfg.skip_button.y)
+        time.sleep(0.3)
+        # DOUBLE TOKENS — синий SKIP (другая позиция)
+        self._ctrl.tap(990, 830)
 
     def restart_game(self, timeout: float = 20.0) -> bool:
         """Restart after crash/results screen. Returns True if back to RACING."""

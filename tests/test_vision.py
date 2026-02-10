@@ -323,14 +323,13 @@ class TestFullPipeline:
 
 class TestNavigator:
     def test_ensure_racing_from_main_menu(self):
-        """Navigator should tap race_button when in MAIN_MENU."""
+        """Navigator should tap RACE button when in MAIN_MENU."""
         from hillclimb.navigator import Navigator
 
         mock_ctrl = MagicMock()
         mock_cap = MagicMock()
         mock_vision = MagicMock()
 
-        # First call: MAIN_MENU, second call: RACING
         state_menu = MagicMock()
         state_menu.game_state = GameState.MAIN_MENU
         state_racing = MagicMock()
@@ -343,7 +342,8 @@ class TestNavigator:
         result = nav.ensure_racing(timeout=10.0)
 
         assert result is True
-        mock_ctrl.tap.assert_called_once_with(cfg.race_button.x, cfg.race_button.y)
+        # RACE кнопка тапается по фиксированной позиции на карте
+        mock_ctrl.tap.assert_any_call(1860, 570)
 
     def test_ensure_racing_from_results(self):
         """Navigator should capture results and tap retry when in RESULTS."""
@@ -373,7 +373,7 @@ class TestNavigator:
         mock_ctrl.tap.assert_called_once_with(cfg.retry_button.x, cfg.retry_button.y)
 
     def test_ensure_racing_from_double_coins(self):
-        """Navigator should tap skip when in DOUBLE_COINS_POPUP."""
+        """Navigator should dismiss popups when in DOUBLE_COINS_POPUP."""
         from hillclimb.navigator import Navigator
 
         mock_ctrl = MagicMock()
@@ -392,4 +392,6 @@ class TestNavigator:
         result = nav.ensure_racing(timeout=10.0)
 
         assert result is True
-        mock_ctrl.tap.assert_called_once_with(cfg.skip_button.x, cfg.skip_button.y)
+        # _dismiss_popups тапает SKIP в обеих позициях (COINS + TOKENS)
+        mock_ctrl.tap.assert_any_call(cfg.skip_button.x, cfg.skip_button.y)
+        mock_ctrl.tap.assert_any_call(990, 830)

@@ -155,54 +155,14 @@ class VisionAnalyzer:
         if dark_ratio > 0.4 and bottom_white > 0.05 and orange_ratio < 0.03:
             return GameState.TOUCH_TO_CONTINUE
 
-        # 3. RESULTS: green buttons at bottom (RETRY left, NEXT right)
-        #    Look for green button pixels at bottom corners
-        bottom_left = hsv[int(h * 0.85):, : w // 3]
-        bottom_right = hsv[int(h * 0.85):, 2 * w // 3 :]
-        green_lower = np.array([35, 80, 80], dtype=np.uint8)
-        green_upper = np.array([85, 255, 255], dtype=np.uint8)
-        green_bl = np.mean(cv2.inRange(bottom_left, green_lower, green_upper) > 0)
-        green_br = np.mean(cv2.inRange(bottom_right, green_lower, green_upper) > 0)
-        if green_bl > 0.08 and green_br > 0.08:
-            return GameState.RESULTS
-
-        # 4. DOUBLE_COINS_POPUP: жёлтая кнопка SKIP в центре + затемнение ОБОИХ краёв
-        #    (монеты на трассе тоже жёлтые, но не затемняют края экрана)
-        center_region = hsv[int(h * 0.55) : int(h * 0.75),
-                            int(w * 0.3) : int(w * 0.6)]
-        yellow_lower = np.array([18, 100, 150], dtype=np.uint8)
-        yellow_upper = np.array([35, 255, 255], dtype=np.uint8)
-        yellow_mask = cv2.inRange(center_region, yellow_lower, yellow_upper)
-        yellow_ratio = np.mean(yellow_mask > 0)
-        # Попап затемняет ОБА края экрана
-        right_edge = hsv[h // 4 : 3 * h // 4, 5 * w // 6 :]
-        left_edge = hsv[h // 4 : 3 * h // 4, : w // 6]
-        dark_right = np.mean(right_edge[:, :, 2] < 80)
-        dark_left = np.mean(left_edge[:, :, 2] < 80)
-        if yellow_ratio > 0.07 and dark_right > 0.3 and dark_left > 0.3:
-            return GameState.DOUBLE_COINS_POPUP
-
-        # 5. VEHICLE_SELECT: START button bottom-right + BACK button bottom-left
-        #    START is typically a large green/yellow button
-        vivid_br = (
-            (bottom_right[:, :, 1] > 100) & (bottom_right[:, :, 2] > 120)
-        )
-        vivid_bl = (
-            (bottom_left[:, :, 1] > 60) & (bottom_left[:, :, 2] > 100)
-        )
-        if np.mean(vivid_br) > 0.10 and np.mean(vivid_bl) > 0.03:
-            # Distinguish from RESULTS: RESULTS has two green buttons,
-            # VEHICLE_SELECT has one green + one grey/arrow
-            if green_bl < 0.05:  # left button is NOT green = not RESULTS
-                return GameState.VEHICLE_SELECT
-
-        # 6. RACING: dial gauges visible at bottom-center
-        #    Check BEFORE MAIN_MENU since racing HUD has vivid dials/pedals
+        # 3. RACING: циферблаты с красной стрелкой — самый надёжный сигнал
+        #    Проверяем ДО RESULTS, потому что зелёная трава Countryside
+        #    ложно срабатывает как зелёные кнопки RETRY/NEXT
         dial_region = self._crop_circle_roi(frame, cfg.rpm_dial_roi)
+        has_racing_dial = False
         if dial_region is not None:
             dial_hsv = cv2.cvtColor(dial_region, cv2.COLOR_BGR2HSV)
             dial_brightness = np.mean(dial_hsv[:, :, 2])
-            # Also check for red needle pixels in dial (confirms it's a gauge)
             needle_mask = (
                 cv2.inRange(dial_hsv,
                             np.array(cfg.needle_hsv_lower1, dtype=np.uint8),
@@ -213,14 +173,45 @@ class VisionAnalyzer:
             )
             has_needle = np.mean(needle_mask > 0) > 0.005
             if dial_brightness > 30 and has_needle:
+                has_racing_dial = True
                 return GameState.RACING
 
-        # 7. MAIN_MENU: RACE button in centre-bottom, vivid colours
+        # 4. RESULTS: зелёные кнопки в обоих нижних углах (RETRY + NEXT)
+        bottom_left = hsv[int(h * 0.85):, : w // 3]
+        bottom_right = hsv[int(h * 0.85):, 2 * w // 3 :]
+        green_lower = np.array([35, 80, 80], dtype=np.uint8)
+        green_upper = np.array([85, 255, 255], dtype=np.uint8)
+        green_bl = np.mean(cv2.inRange(bottom_left, green_lower, green_upper) > 0)
+        green_br = np.mean(cv2.inRange(bottom_right, green_lower, green_upper) > 0)
+        if green_bl > 0.08 and green_br > 0.08:
+            return GameState.RESULTS
+
+        # 5. DOUBLE_COINS_POPUP: жёлтая кнопка SKIP в центре + затемнение ОБОИХ краёв
+        center_region = hsv[int(h * 0.55) : int(h * 0.75),
+                            int(w * 0.3) : int(w * 0.6)]
+        yellow_lower = np.array([18, 100, 150], dtype=np.uint8)
+        yellow_upper = np.array([35, 255, 255], dtype=np.uint8)
+        yellow_mask = cv2.inRange(center_region, yellow_lower, yellow_upper)
+        yellow_ratio = np.mean(yellow_mask > 0)
+        right_edge = hsv[h // 4 : 3 * h // 4, 5 * w // 6 :]
+        left_edge = hsv[h // 4 : 3 * h // 4, : w // 6]
+        dark_right = np.mean(right_edge[:, :, 2] < 80)
+        dark_left = np.mean(left_edge[:, :, 2] < 80)
+        if yellow_ratio > 0.07 and dark_right > 0.3 and dark_left > 0.3:
+            return GameState.DOUBLE_COINS_POPUP
+
+        # 6. VEHICLE_SELECT: зелёная кнопка START в правом нижнем углу
+        green_start = np.mean(cv2.inRange(
+            bottom_right, green_lower, green_upper) > 0)
+        if green_start > 0.05 and green_bl < 0.05:
+            return GameState.VEHICLE_SELECT
+
+        # 7. MAIN_MENU: яркий центр-низ + НЕТ зелёной START кнопки справа
         bottom_center = hsv[int(h * 0.7) :, w // 3 : 2 * w // 3]
         vivid_bc = (
             (bottom_center[:, :, 1] > 120) & (bottom_center[:, :, 2] > 120)
         )
-        if np.mean(vivid_bc) > 0.10:
+        if np.mean(vivid_bc) > 0.10 and green_start < 0.03:
             return GameState.MAIN_MENU
 
         # Fallback: horizontal fuel gauge check (legacy)
@@ -375,23 +366,31 @@ class VisionAnalyzer:
         return self._ocr_distance_from_crop(crop)
 
     def _ocr_distance_from_crop(self, crop: np.ndarray) -> float:
-        """Извлечь дистанцию из кропа текста.
+        """Извлечь дистанцию из кропа текста (мульти-порог).
 
         Игровой шрифт HCR2 — жирный курсив с неоднородной яркостью.
-        Порог ~158, морфология open (убрать шум), инверсия для Tesseract.
+        Запускаем OCR при 4 порогах, берём результат с максимумом цифр.
         """
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 158, 255, cv2.THRESH_BINARY)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-        inv = cv2.bitwise_not(cleaned)
-        padded = cv2.copyMakeBorder(inv, 20, 20, 20, 20,
-                                     cv2.BORDER_CONSTANT, value=255)
-        scaled = cv2.resize(padded, None, fx=2, fy=2,
-                            interpolation=cv2.INTER_LINEAR)
 
-        text = self._run_ocr(scaled)
-        return self._parse_distance(text)
+        best_dist = 0.0
+        best_ndigits = 0
+        for thresh_val in (150, 160, 170, 185):
+            _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
+            cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+            inv = cv2.bitwise_not(cleaned)
+            padded = cv2.copyMakeBorder(inv, 20, 20, 20, 20,
+                                         cv2.BORDER_CONSTANT, value=255)
+            scaled = cv2.resize(padded, None, fx=2, fy=2,
+                                interpolation=cv2.INTER_LINEAR)
+            text = self._run_ocr(scaled)
+            dist = self._parse_distance(text)
+            ndigits = len(re.findall(r"\d", text))
+            if ndigits > best_ndigits:
+                best_ndigits = ndigits
+                best_dist = dist
+        return best_dist
 
     @staticmethod
     def _parse_distance(text: str) -> float:
