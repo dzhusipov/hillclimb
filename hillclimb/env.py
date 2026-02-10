@@ -14,6 +14,9 @@ from hillclimb.controller import ADBController, Action
 from hillclimb.navigator import Navigator
 from hillclimb.vision import GameState, VisionAnalyzer, VisionState
 
+# Длительности удержания (мс) — модель выбирает одну из них
+HOLD_DURATIONS = [100, 200, 400, 700, 1100]
+
 
 class HillClimbEnv(gym.Env):
     """Gymnasium-compatible environment for Hill Climb Racing 2.
@@ -22,8 +25,10 @@ class HillClimbEnv(gym.Env):
         [fuel, rpm, boost, tilt_norm, terrain_slope_norm,
          airborne, speed_estimate, distance_norm]
 
-    Action: Discrete(3)
-        0 = nothing, 1 = gas, 2 = brake
+    Action: MultiDiscrete([3, 5])
+        dim 0: тип действия — 0=nothing, 1=gas, 2=brake
+        dim 1: длительность удержания — индекс в HOLD_DURATIONS
+               [100ms, 200ms, 400ms, 700ms, 1100ms]
 
     Reward:
         +0.1 * distance_delta_m  (actual metres gained)
@@ -41,7 +46,8 @@ class HillClimbEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(8,), dtype=np.float32,
         )
-        self.action_space = spaces.Discrete(3)
+        # MultiDiscrete: [тип_действия (3), длительность (5)]
+        self.action_space = spaces.MultiDiscrete([3, len(HOLD_DURATIONS)])
         self.render_mode = render_mode
 
         self._capture = ScreenCapture()
@@ -53,6 +59,7 @@ class HillClimbEnv(gym.Env):
 
         self._prev_state: VisionState | None = None
         self._step_count = 0
+        self._max_distance_m = 0.0
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -77,21 +84,26 @@ class HillClimbEnv(gym.Env):
         state = self._vision.analyze(frame)
         self._prev_state = state
         self._step_count = 0
+        self._max_distance_m = 0.0
 
         return state.to_array(), {}
 
     def step(
-        self, action: int,
+        self, action: np.ndarray,
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
         self._step_count += 1
 
-        self._controller.execute(Action(action))
-        time.sleep(cfg.loop_interval_sec)
+        # Декодируем MultiDiscrete: [тип, длительность]
+        action_type = int(action[0])
+        hold_ms = HOLD_DURATIONS[int(action[1])]
+
+        # Удерживаем газ/тормоз на выбранную длительность
+        self._controller.execute(Action(action_type), duration_ms=hold_ms)
 
         frame = self._capture.grab()
         state = self._vision.analyze(frame)
 
-        reward = self._compute_reward(self._prev_state, state, action)
+        reward = self._compute_reward(self._prev_state, state, action_type)
 
         terminated = state.game_state in (
             GameState.DRIVER_DOWN,
@@ -103,19 +115,23 @@ class HillClimbEnv(gym.Env):
         if state.fuel <= 0.01 and state.speed_estimate < 0.05:
             terminated = True
 
+        # Трекаем максимальную дистанцию из RACING
+        # Фильтр: скачок > 100м за один шаг = OCR ошибка, игнорируем
+        if state.game_state == GameState.RACING and state.distance_m > self._max_distance_m:
+            jump = state.distance_m - self._max_distance_m
+            if jump < 100 or self._max_distance_m == 0:
+                self._max_distance_m = state.distance_m
+
         self._prev_state = state
 
         info: dict = {
             "game_state": state.game_state.name,
             "fuel": state.fuel,
             "distance_m": state.distance_m,
+            "max_distance_m": self._max_distance_m,
             "step": self._step_count,
+            "hold_ms": hold_ms,
         }
-
-        # Capture results data if available
-        if state.game_state == GameState.RESULTS:
-            info["results_coins"] = state.results_coins
-            info["results_distance_m"] = state.results_distance_m
 
         if self.render_mode == "human":
             import cv2
@@ -140,7 +156,7 @@ class HillClimbEnv(gym.Env):
     def _compute_reward(
         prev: VisionState | None,
         curr: VisionState,
-        action: int,
+        action_type: int,
     ) -> float:
         reward = 0.0
 

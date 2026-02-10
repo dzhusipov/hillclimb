@@ -11,6 +11,8 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from hillclimb.config import cfg
 from hillclimb.vision import GameState, VisionState
 
@@ -115,6 +117,10 @@ class Navigator:
                 self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
                 time.sleep(2.0)
 
+            elif gs == GameState.CAPTCHA:
+                self._solve_captcha(frame)
+                time.sleep(2.0)
+
             elif gs == GameState.UNKNOWN:
                 # Пробуем закрыть попап: X в правом верхнем углу (Special Offer и т.п.)
                 self._ctrl.tap(1790, 55)
@@ -124,6 +130,55 @@ class Navigator:
                 time.sleep(1.0)
 
         return False
+
+    def _solve_captcha(self, frame: np.ndarray) -> None:
+        """Пройти проверку 'ARE YOU A ROBOT?': найти чекбокс → тап → ждём OK → тап."""
+        import cv2
+        h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # Ищем чекбокс: белый квадрат ~30-60px на тёмном фоне
+        # Чекбокс — яркий прямоугольник с чёткими краями
+        _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        # Ищем контуры
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        checkbox_pos = None
+        for cnt in contours:
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            # Чекбокс: квадратный, 20-80px, в верхней половине экрана
+            if 15 < cw < 100 and 15 < ch < 100 and 0.6 < cw / ch < 1.6 and y < h * 0.6:
+                # Проверяем что это не просто шум — внутри должно быть пусто (тёмное)
+                inner = gray[y + 3 : y + ch - 3, x + 3 : x + cw - 3]
+                if inner.size > 0 and np.mean(inner) < 150:
+                    checkbox_pos = (x + cw // 2, y + ch // 2)
+                    break
+
+        if checkbox_pos:
+            # Тапаем чекбокс
+            self._ctrl.tap(checkbox_pos[0], checkbox_pos[1])
+            time.sleep(1.5)
+            # После чекбокса появляется зелёная кнопка OK — ищем её
+            frame2 = self._cap.grab()
+            state2 = self._vision.analyze(frame2)
+            # Ищем зелёную кнопку в нижней части
+            hsv2 = cv2.cvtColor(frame2, cv2.COLOR_BGR2HSV)
+            green_mask = cv2.inRange(hsv2,
+                                      np.array([35, 80, 80], dtype=np.uint8),
+                                      np.array([85, 255, 255], dtype=np.uint8))
+            # Ищем зелёный блоб
+            contours_g, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in sorted(contours_g, key=cv2.contourArea, reverse=True):
+                x, y, gw, gh = cv2.boundingRect(cnt)
+                if gw > 50 and gh > 20:
+                    self._ctrl.tap(x + gw // 2, y + gh // 2)
+                    break
+        else:
+            # Не нашли чекбокс — тапаем примерное место (центр-верх)
+            self._ctrl.tap(w // 2, int(h * 0.3))
+            time.sleep(1.5)
+            # Тапаем центр (OK кнопка)
+            self._ctrl.tap(cfg.center_screen.x, int(h * 0.7))
 
     def _fling(self) -> None:
         """Свайп вниз-вверх для 'fling' промо в Adventures (оттянуть и отпустить)."""
