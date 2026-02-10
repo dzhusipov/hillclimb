@@ -122,16 +122,20 @@ def train(
     print(f"Actions: MultiDiscrete([3, 5]) — тип × длительность [100,200,400,700,1100]мс")
     print("-" * 70)
 
-    model.learn(
-        total_timesteps=total_timesteps,
-        callback=CallbackList([checkpoint_cb, episode_cb]),
-        progress_bar=True,
-    )
-
-    # Save final model
     save_path = model_dir / "ppo_hillclimb"
+
+    try:
+        model.learn(
+            total_timesteps=total_timesteps,
+            callback=CallbackList([checkpoint_cb, episode_cb]),
+            progress_bar=True,
+        )
+        print("\nTraining complete.")
+    except KeyboardInterrupt:
+        print("\n\nCtrl+C — saving model before exit...")
+
     model.save(str(save_path))
-    print(f"\nModel saved to {save_path}")
+    print(f"Model saved to {save_path}")
 
     env.close()
 
