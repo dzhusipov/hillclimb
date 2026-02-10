@@ -201,18 +201,20 @@ class VisionAnalyzer:
         if green_bl > 0.08 and green_br > 0.08:
             return GameState.RESULTS
 
-        # 5. DOUBLE_COINS_POPUP: жёлтая кнопка SKIP в центре + затемнение ОБОИХ краёв
-        center_region = hsv[int(h * 0.55) : int(h * 0.75),
-                            int(w * 0.3) : int(w * 0.6)]
+        # 5. DOUBLE_COINS_POPUP: жёлтые монеты/2x сверху + синяя SKIP внизу
+        #    Жёлтый в верхней-центральной зоне (монеты, "2x")
+        top_center = hsv[int(h * 0.15) : int(h * 0.55),
+                         int(w * 0.25) : int(w * 0.75)]
         yellow_lower = np.array([18, 100, 150], dtype=np.uint8)
         yellow_upper = np.array([35, 255, 255], dtype=np.uint8)
-        yellow_mask = cv2.inRange(center_region, yellow_lower, yellow_upper)
-        yellow_ratio = np.mean(yellow_mask > 0)
-        right_edge = hsv[h // 4 : 3 * h // 4, 5 * w // 6 :]
-        left_edge = hsv[h // 4 : 3 * h // 4, : w // 6]
-        dark_right = np.mean(right_edge[:, :, 2] < 80)
-        dark_left = np.mean(left_edge[:, :, 2] < 80)
-        if yellow_ratio > 0.07 and dark_right > 0.3 and dark_left > 0.3:
+        yellow_top = np.mean(cv2.inRange(top_center, yellow_lower, yellow_upper) > 0)
+        #    Синяя SKIP кнопка внизу-по-центру
+        skip_zone = hsv[int(h * 0.70) : int(h * 0.90),
+                        int(w * 0.30) : int(w * 0.55)]
+        blue_lower = np.array([100, 60, 80], dtype=np.uint8)
+        blue_upper = np.array([130, 255, 255], dtype=np.uint8)
+        blue_skip = np.mean(cv2.inRange(skip_zone, blue_lower, blue_upper) > 0)
+        if yellow_top > 0.10 and blue_skip > 0.05:
             return GameState.DOUBLE_COINS_POPUP
 
         # 6. VEHICLE_SELECT: зелёная кнопка START в правом нижнем углу

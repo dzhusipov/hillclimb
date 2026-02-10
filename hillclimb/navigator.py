@@ -202,10 +202,12 @@ class Navigator:
 
     def _dismiss_popups(self) -> None:
         """Закрыть попапы SKIP в обеих известных позициях."""
-        # DOUBLE COINS — жёлтый SKIP
+        # DOUBLE COINS — синяя SKIP (центр попапа)
+        self._ctrl.tap(967, 869)
+        time.sleep(0.3)
+        # Резерв: жёлтый SKIP (cfg) + вторая позиция
         self._ctrl.tap(cfg.skip_button.x, cfg.skip_button.y)
         time.sleep(0.3)
-        # DOUBLE TOKENS — синий SKIP (другая позиция)
         self._ctrl.tap(990, 830)
 
     def restart_game(self, timeout: float = 20.0) -> bool:
