@@ -38,12 +38,51 @@
 - [x] `vision.py` обновлён: template matching OCR вместо Tesseract (с fallback)
 - [x] Smoke-тест: capture (480x800 BGR) + vision (VEHICLE_SELECT detected) + controller OK
 
-### Шаг 4: Калибровка — НЕ НАЧАТ
-Нужно определить точные ROI и координаты кнопок для 800x480 ReDroid.
-Нужно создать шаблоны цифр для template matching OCR.
+### Шаг 4: Калибровка ROI и кнопок — ВЫПОЛНЕН ✅
+- [x] Координаты кнопок: gas, brake, race, start, retry, skip, adventure_tab, center_screen
+- [x] ROI: fuel_gauge, distance_text, vehicle, terrain
+- [x] Dial ROIs: rpm_dial, fuel_dial, boost_dial (CircleROI)
+- [x] Шаблоны цифр 0-9 для in-race OCR (`templates/digits/`)
+- [x] Шаблоны цифр для RESULTS OCR (`templates/digits_results/`)
+- [x] Needle HSV ranges для красной стрелки циферблатов
 
-### Шаг 5–10: НЕ НАЧАТЫ
-Следующий шаг: **Шаг 4 — Калибровка ROI и кнопок**
+### Шаг 5: Env + Rule-based + Navigator — ВЫПОЛНЕН ✅
+- [x] `env.py` — Gymnasium HCR2Env: obs 8-dim float, Discrete(3), reward function
+- [x] `navigator.py` — полная state machine (9 состояний)
+- [x] `agent_rules.py` — rule-based baseline агент
+- [x] `game_loop.py` — capture → CV → agent → input цикл
+- [x] Smoke-тест: 10+ эпизодов стабильно на одном эмуляторе
+
+### Шаг 6: Параллелизация (8 эмуляторов) — ВЫПОЛНЕН ✅
+- [x] `train.py` — SubprocVecEnv с make_env() фабрикой
+- [x] `env.py` — watchdog: Docker container restart при ADB timeout
+- [x] `config.py` — num_emulators=8
+- [x] APK установлена на все 8 эмуляторов (split APK: base + x86_64 + en + mdpi)
+- [x] Прогресс (gamestatus.bin/bak) перенесён на все 8
+
+### Шаг 7: Дашборд мониторинга — ВЫПОЛНЕН ~90%
+- [x] `web/server.py` — FastAPI + /snapshot/{emu_id} endpoint
+- [x] `web/static/app.js` — snapshot polling каждые 800мс (обход лимита 6 HTTP-соединений)
+- [x] Все 8 эмуляторов видны в дашборде
+- [x] ws-scrcpy на порту 8100
+- [ ] **TODO:** графики reward, кнопки pause/resume, WebSocket live updates
+
+### Шаг 8: PPO-обучение — В ПРОЦЕССЕ 🔄
+- [x] `train.py` — PPO + SubprocVecEnv + EpisodeLogCallback
+- [x] Чекпоинты каждые ~5000 шагов
+- [x] TensorBoard логирование
+- [x] `--resume` для продолжения обучения
+- [x] Фикс ложной CAPTCHA на главном меню (overall_V < 75)
+- [x] Фикс RPM-dial guard для тёмных карт
+- [x] 3-шаговый CAPTCHA handler (BACK → ADVENTURE → relaunch)
+- [x] Portrait frame detection → auto-relaunch
+- [ ] **ТЕКУЩЕЕ:** Обучение 100k timesteps на 8 эмуляторах (~14 часов)
+- [ ] **TODO:** Анализ результатов, тюнинг гиперпараметров
+
+### Шаг 9: Imitation Learning — НЕ НАЧАТ
+### Шаг 10: Полное обучение — НЕ НАЧАТ
+
+**Следующий шаг: утром проверить результаты обучения 100k timesteps**
 
 ---
 

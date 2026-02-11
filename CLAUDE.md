@@ -11,21 +11,19 @@ AI-агент, который играет в Hill Climb Racing 2 на пара�
 ## Архитектура
 ```
 ┌── Docker ──────────────────────────────────────┐
-│  ReDroid #0 (HCR2) ← ADB localhost:5555       │
-│  ReDroid #1 (HCR2) ← ADB localhost:5556       │
-│  ...до 8 эмуляторов                            │
+│  ReDroid #0..#7 (HCR2) ← ADB :5555-:5562      │
 │  ws-scrcpy (:8100) — live просмотр             │
-│  hcr2-dashboard (:8150) — мониторинг + контроль│
+│  hcr2-dashboard (:8150) — snapshot polling     │
 └────────────────────────────────────────────────┘
-         │ screencap (PNG, ~250ms)
+         │ screencap (PNG, ~250ms, timeout 10s)
          ▼
 ┌── Conda: hillclimb ───────────────────────────┐
 │  capture.py    — ADB screencap через adbutils  │
 │  vision.py     — CV: 9 states, dials, OCR      │
 │  controller.py — ADB input: gas/brake/tap      │
-│  navigator.py  — state machine навигация       │
-│  env.py        — Gymnasium HCR2Env             │
-│  train.py      — PPO (RTX 3090, CUDA)         │
+│  navigator.py  — state machine + CAPTCHA/OFFLINE│
+│  env.py        — Gymnasium HCR2Env + watchdog  │
+│  train.py      — PPO SubprocVecEnv (8 envs)   │
 └────────────────────────────────────────────────┘
 ```
 
@@ -114,8 +112,18 @@ python -m hillclimb.controller --serial localhost:5555 --test
 python -m hillclimb.game_loop --agent rules
 python -m hillclimb.game_loop --agent rules --episodes 5 --headless
 
-# Обучение RL агента
-python -m hillclimb.train --timesteps 10000000 --num-envs 8
+# Обучение RL агента (8 параллельных эмуляторов)
+python -m hillclimb.train --timesteps 100000 --num-envs 8
+
+# Обучение на ночь (nohup, лог в файл)
+nohup python -u -m hillclimb.train --timesteps 500000 --num-envs 8 > logs/train_run.log 2>&1 &
+
+# Продолжить обучение с чекпоинта
+python -m hillclimb.train --timesteps 500000 --num-envs 8 --resume models/ppo_hillclimb
+
+# Мониторинг обучения
+tail -f logs/train_run.log
+grep "^  EP" logs/train_run.log | tail -20
 
 # Запуск RL агента
 python -m hillclimb.game_loop --agent rl
@@ -130,11 +138,11 @@ hillclimb/
 │   ├── .env                  — конфигурация эмуляторов
 │   └── apk/                  — APK файлы HCR2 (gitignored)
 ├── web/
-│   ├── server.py             — FastAPI дашборд (:8150)
+│   ├── server.py             — FastAPI дашборд (:8150) + /snapshot endpoint
 │   ├── emulator.py           — управление эмуляторами (Docker + ADB)
-│   ├── streamer.py           — MJPEG стриминг
+│   ├── streamer.py           — MJPEG стриминг (legacy, для ws-scrcpy)
 │   ├── templates/dashboard.html
-│   └── static/{app.js, style.css}
+│   └── static/{app.js, style.css}  — snapshot polling (800мс)
 ├── hillclimb/
 │   ├── config.py             — координаты кнопок, ROI, пороги (800x480)
 │   ├── capture.py            — ADB screencap через adbutils
@@ -174,14 +182,25 @@ CAPTCHA → (handle) → continue
 | State | Action | Wait | Expect |
 |-------|--------|------|--------|
 | MAIN_MENU | tap race_button | 2s | VEHICLE_SELECT |
-| VEHICLE_SELECT | tap start_button | 3s | RACING |
+| VEHICLE_SELECT | tap start_button + dismiss_popups | 3.5s | RACING |
 | DOUBLE_COINS_POPUP | tap skip_button | 2s | RACING |
-| DRIVER_DOWN | tap center_screen | 1s | TOUCH_TO_CONTINUE |
+| DRIVER_DOWN | tap center + BACK (skip second chance) | 0.8s | TOUCH_TO_CONTINUE |
 | TOUCH_TO_CONTINUE | tap center_screen | 1.5s | RESULTS |
 | RESULTS | read OCR → tap retry | 2s | VEHICLE_SELECT |
-| UNKNOWN | tap center_screen | 1s | retry |
+| CAPTCHA | _solve_captcha (3-step) | varies | any |
+| UNKNOWN | BACK + tap center | 1s | retry |
 
 Stuck detection: same state 3 cycles → fallback tap center.
+Portrait frame detection: h > w → not in game → relaunch.
+
+### CAPTCHA / OFFLINE обработка
+Классификатор: `overall_V < 75` + dark top (>70%) + dark edges (>60%) + НЕТ RPM-циферблата.
+Обработчик `_solve_captcha` (3 шага, макс 2 перезапуска):
+1. BACK — скипает OFFLINE popup
+2. ADVENTURE tap (155, 25) — закрывает OFFLINE popup
+3. HOME + `_relaunch_game()` — крайняя мера (настоящая CAPTCHA)
+
+`_relaunch_game()`: force-stop → start → 5s → GOT IT (500,202) → 2× ADVENTURE tap.
 
 ## Actions
 Discrete(3): `0=nothing, 1=gas, 2=brake`

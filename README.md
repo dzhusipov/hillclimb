@@ -24,7 +24,7 @@ AI-агент, который играет в [Hill Climb Racing 2](https://play
 └──────────────────────────────────────────┘
 ```
 
-Цикл работает на ~2.5 FPS через ADB screencap. С параллельными эмуляторами целевой throughput — 60+ steps/sec суммарно.
+Цикл работает на ~2.5 FPS через ADB screencap. 8 параллельных эмуляторов через SubprocVecEnv.
 
 ## Требования
 
@@ -139,8 +139,18 @@ python -m hillclimb.game_loop --agent rules --episodes 5 --headless
 ### Обучение RL-агента (PPO)
 
 ```bash
-python -m hillclimb.train --timesteps 10000000 --num-envs 8
-python -m hillclimb.train --resume models/ppo_hillclimb.zip
+# Быстрый тест (100k шагов, ~14 часов на 8 эмуляторах)
+python -m hillclimb.train --timesteps 100000 --num-envs 8
+
+# Обучение на ночь (nohup, лог в файл)
+nohup python -u -m hillclimb.train --timesteps 500000 --num-envs 8 > logs/train_run.log 2>&1 &
+
+# Продолжить обучение с сохранённой модели
+python -m hillclimb.train --timesteps 500000 --num-envs 8 --resume models/ppo_hillclimb
+
+# Мониторинг обучения
+tail -f logs/train_run.log
+grep "^  EP" logs/train_run.log | tail -20
 ```
 
 ### Оценка обученной модели
@@ -154,8 +164,9 @@ python -m hillclimb.evaluate --episodes 10
 | URL | Описание |
 |-----|----------|
 | `http://NAS-IP:8100` | ws-scrcpy — live просмотр эмуляторов |
-| `http://NAS-IP:8150` | Веб-дашборд — статусы, MJPEG, управление |
+| `http://NAS-IP:8150` | Веб-дашборд — snapshot polling, статусы, управление |
 
+Дашборд использует snapshot polling (800мс) вместо MJPEG — обходит лимит 6 HTTP-соединений браузера.
 Оба сервиса видны в CasaOS.
 
 ## Структура проекта
@@ -170,9 +181,9 @@ hillclimb/
 ├── web/
 │   ├── server.py             — FastAPI дашборд (:8150)
 │   ├── emulator.py           — управление эмуляторами (Docker + ADB)
-│   ├── streamer.py           — MJPEG стриминг
+│   ├── streamer.py           — MJPEG стриминг (legacy)
 │   ├── templates/dashboard.html
-│   └── static/{app.js, style.css}
+│   └── static/{app.js, style.css}  — snapshot polling
 ├── hillclimb/
 │   ├── config.py             — координаты кнопок, ROI, пороги (800x480)
 │   ├── capture.py            — ADB screencap через adbutils
@@ -224,7 +235,7 @@ Discrete(3): `0=nothing, 1=gas, 2=brake`
 - **Screen Capture:** ADB screencap через adbutils (~2.5 FPS)
 - **Input:** ADB shell input swipe через adbutils
 - **Hardware Acceleration:** PyTorch CUDA (RTX 3090)
-- **Web Dashboard:** FastAPI + MJPEG + WebSocket
+- **Web Dashboard:** FastAPI + Snapshot Polling (800мс)
 - **Monitoring:** ws-scrcpy, CasaOS
 
 ## Тесты
