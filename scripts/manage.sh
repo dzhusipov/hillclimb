@@ -169,7 +169,8 @@ cmd_status() {
 
         # Check if container is running
         local docker_status
-        docker_status=$(docker inspect --format='{{.State.Status}}' "$name" 2>/dev/null || echo "not found")
+        docker_status=$(docker inspect --format='{{.State.Status}}' "$name" 2>/dev/null | tr -d '\n' || true)
+        [ -z "$docker_status" ] && docker_status="not found"
 
         local boot_status="-"
         if [ "$docker_status" = "running" ]; then
@@ -210,7 +211,8 @@ cmd_install_apk() {
 
         # Check if container is running
         local docker_status
-        docker_status=$(docker inspect --format='{{.State.Status}}' "$name" 2>/dev/null || echo "not found")
+        docker_status=$(docker inspect --format='{{.State.Status}}' "$name" 2>/dev/null | tr -d '\n' || true)
+        [ -z "$docker_status" ] && docker_status="not found"
         if [ "$docker_status" != "running" ]; then
             continue
         fi

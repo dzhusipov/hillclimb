@@ -87,7 +87,7 @@ services:
     image: scavin/ws-scrcpy
     container_name: ws-scrcpy
     ports:
-      - "8000:8000"
+      - "8100:8000"
     depends_on:
       - hcr2-0
       - hcr2-1
