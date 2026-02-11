@@ -64,6 +64,15 @@ class Navigator:
 
         while time.time() < deadline:
             frame = self._cap.capture()
+
+            # Portrait frame = not in game (home screen, other app)
+            h, w = frame.shape[:2]
+            if h > w:
+                print(f"  [NAV] Portrait frame ({w}x{h}) — not in game, relaunching...")
+                self._save_debug_frame(frame, "not_in_game")
+                self._relaunch_game()
+                continue
+
             state = self._vision.analyze(frame)
             gs = state.game_state
             elapsed = time.time() - nav_start
@@ -156,6 +165,14 @@ class Navigator:
 
         return False
 
+    def _relaunch_game(self) -> None:
+        """Force-stop and relaunch HCR2."""
+        print("  [NAV] Relaunching HCR2...")
+        self._ctrl.shell("am force-stop com.fingersoft.hcr2")
+        time.sleep(1.0)
+        self._ctrl.shell("am start -n com.fingersoft.hcr2/.AppActivity")
+        time.sleep(5.0)
+
     def _solve_captcha(self, frame: np.ndarray) -> None:
         """Обойти проверку 'ARE YOU A ROBOT?'.
 
@@ -179,11 +196,7 @@ class Navigator:
         time.sleep(2.0)
 
         # Перезапускаем HCR2
-        self._ctrl.shell(
-            "monkey -p com.fingersoft.hcr2 "
-            "-c android.intent.category.LAUNCHER 1"
-        )
-        time.sleep(5.0)
+        self._relaunch_game()
         print("  [CAPTCHA] Game relaunched")
 
     def _fling(self) -> None:
