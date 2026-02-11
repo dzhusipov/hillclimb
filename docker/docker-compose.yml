@@ -1,0 +1,110 @@
+x-redroid-common: &redroid-common
+  image: ${REDROID_IMAGE:-redroid/redroid:14.0.0-latest}
+  privileged: true
+  mem_limit: ${MEM_LIMIT:-3g}
+  cpus: ${CPU_LIMIT:-1.2}
+  command:
+    - androidboot.redroid_gpu_mode=guest
+    - androidboot.redroid_width=${WIDTH:-480}
+    - androidboot.redroid_height=${HEIGHT:-800}
+    - androidboot.redroid_dpi=${DPI:-160}
+  restart: unless-stopped
+  networks:
+    - hcr2-net
+
+services:
+  hcr2-0:
+    <<: *redroid-common
+    container_name: hcr2-0
+    ports:
+      - "${ADB_PORT_BASE:-5555}:5555"
+    volumes:
+      - hcr2-data-0:/data
+
+  hcr2-1:
+    <<: *redroid-common
+    container_name: hcr2-1
+    ports:
+      - "5556:5555"
+    volumes:
+      - hcr2-data-1:/data
+
+  hcr2-2:
+    <<: *redroid-common
+    container_name: hcr2-2
+    profiles: ["scale-4", "scale-8"]
+    ports:
+      - "5557:5555"
+    volumes:
+      - hcr2-data-2:/data
+
+  hcr2-3:
+    <<: *redroid-common
+    container_name: hcr2-3
+    profiles: ["scale-4", "scale-8"]
+    ports:
+      - "5558:5555"
+    volumes:
+      - hcr2-data-3:/data
+
+  hcr2-4:
+    <<: *redroid-common
+    container_name: hcr2-4
+    profiles: ["scale-8"]
+    ports:
+      - "5559:5555"
+    volumes:
+      - hcr2-data-4:/data
+
+  hcr2-5:
+    <<: *redroid-common
+    container_name: hcr2-5
+    profiles: ["scale-8"]
+    ports:
+      - "5560:5555"
+    volumes:
+      - hcr2-data-5:/data
+
+  hcr2-6:
+    <<: *redroid-common
+    container_name: hcr2-6
+    profiles: ["scale-8"]
+    ports:
+      - "5561:5555"
+    volumes:
+      - hcr2-data-6:/data
+
+  hcr2-7:
+    <<: *redroid-common
+    container_name: hcr2-7
+    profiles: ["scale-8"]
+    ports:
+      - "5562:5555"
+    volumes:
+      - hcr2-data-7:/data
+
+  ws-scrcpy:
+    image: scavin/ws-scrcpy
+    container_name: ws-scrcpy
+    ports:
+      - "8000:8000"
+    depends_on:
+      - hcr2-0
+      - hcr2-1
+    restart: unless-stopped
+    networks:
+      - hcr2-net
+
+networks:
+  hcr2-net:
+    driver: bridge
+
+volumes:
+  hcr2-data-0:
+  hcr2-data-1:
+  hcr2-data-2:
+  hcr2-data-3:
+  hcr2-data-4:
+  hcr2-data-5:
+  hcr2-data-6:
+  hcr2-data-7:

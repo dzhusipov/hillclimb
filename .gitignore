@@ -6,3 +6,6 @@ config.json
 models/
 logs/
 templates/
+docker/apk/*.apk
+docker/apk/*.xapk
+docker/.env
