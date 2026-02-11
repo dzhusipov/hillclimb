@@ -19,14 +19,27 @@ from hillclimb.vision import GameState, VisionAnalyzer
 class GameLoop:
     """Orchestrates the capture -> CV -> decision -> input cycle."""
 
-    def __init__(self, agent: object, headless: bool = False) -> None:
-        self._capture = ScreenCapture()
+    def __init__(
+        self,
+        agent: object,
+        adb_serial: str = "localhost:5555",
+        headless: bool = False,
+    ) -> None:
+        self._capture = ScreenCapture(adb_serial=adb_serial)
         self._vision = VisionAnalyzer()
-        self._controller = ADBController()
+        self._controller = ADBController(
+            adb_serial=adb_serial,
+            gas_x=cfg.gas_button.x,
+            gas_y=cfg.gas_button.y,
+            brake_x=cfg.brake_button.x,
+            brake_y=cfg.brake_button.y,
+            action_hold_ms=cfg.action_hold_ms,
+        )
         self._navigator = Navigator(
             self._controller, self._capture, self._vision,
         )
         self._agent = agent
+        self._serial = adb_serial
         self._headless = headless
         self._running = False
         self._logger: Logger | None = None
@@ -50,7 +63,7 @@ class GameLoop:
                 if max_episodes and episode > max_episodes:
                     break
 
-                print(f"\n=== Episode {episode} ===")
+                print(f"\n=== Episode {episode} [{self._serial}] ===")
                 if not self._navigator.ensure_racing():
                     print("Failed to start race, retrying...")
                     time.sleep(2.0)
@@ -88,7 +101,7 @@ class GameLoop:
         while self._running:
             t0 = time.time()
 
-            frame = self._capture.grab()
+            frame = self._capture.capture()
             state = self._vision.analyze(frame)
             gs = state.game_state
 
@@ -161,6 +174,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Hill Climb Racing AI game loop")
     parser.add_argument("--agent", default="rules", choices=["rules", "rl"],
                         help="Agent type (default: rules)")
+    parser.add_argument("--serial", default="localhost:5555",
+                        help="ADB serial (default: localhost:5555)")
     parser.add_argument("--episodes", type=int, default=0,
                         help="Max episodes (0=unlimited)")
     parser.add_argument("--headless", action="store_true",
@@ -168,7 +183,7 @@ def main() -> None:
     args = parser.parse_args()
 
     agent = _load_agent(args.agent)
-    loop = GameLoop(agent, headless=args.headless)
+    loop = GameLoop(agent, adb_serial=args.serial, headless=args.headless)
 
     # Graceful shutdown on Ctrl+C
     def _signal_handler(sig: int, frame: object) -> None:

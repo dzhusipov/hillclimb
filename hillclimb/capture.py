@@ -97,6 +97,9 @@ class ScreenCapture:
         arr = np.frombuffer(pixels[:expected], dtype=np.uint8).reshape(h, w, 4)
         return cv2.cvtColor(arr, cv2.COLOR_RGBA2BGR)
 
+    # Alias for backward compatibility (navigator uses .grab())
+    grab = capture
+
     @property
     def serial(self) -> str:
         return self._serial

@@ -338,15 +338,15 @@ class TestNavigator:
         state_racing = MagicMock()
         state_racing.game_state = GameState.RACING
 
-        mock_cap.grab.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cap.capture.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
         mock_vision.analyze.side_effect = [state_menu, state_racing]
 
         nav = Navigator(mock_ctrl, mock_cap, mock_vision)
         result = nav.ensure_racing(timeout=10.0)
 
         assert result is True
-        # RACE кнопка тапается по фиксированной позиции на карте
-        mock_ctrl.tap.assert_any_call(1860, 570)
+        # RACE кнопка тапается по координатам из cfg
+        mock_ctrl.tap.assert_any_call(cfg.race_button.x, cfg.race_button.y)
 
     def test_ensure_racing_from_results(self):
         """Navigator should capture results and tap retry when in RESULTS."""
@@ -364,7 +364,7 @@ class TestNavigator:
         state_racing = MagicMock()
         state_racing.game_state = GameState.RACING
 
-        mock_cap.grab.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cap.capture.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
         mock_vision.analyze.side_effect = [state_results, state_racing]
 
         nav = Navigator(mock_ctrl, mock_cap, mock_vision)
@@ -388,7 +388,7 @@ class TestNavigator:
         state_racing = MagicMock()
         state_racing.game_state = GameState.RACING
 
-        mock_cap.grab.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
+        mock_cap.capture.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
         mock_vision.analyze.side_effect = [state_popup, state_racing]
 
         nav = Navigator(mock_ctrl, mock_cap, mock_vision)

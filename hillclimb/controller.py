@@ -19,6 +19,10 @@ class Action(IntEnum):
     BRAKE = 2
 
 
+class ADBConnectionError(RuntimeError):
+    """Raised when ADB connection is lost and cannot recover."""
+
+
 class ADBController:
     """Send touch events to a specific Android device via ADB."""
 
@@ -88,9 +92,29 @@ class ADBController:
         """Long press at (x, y) for duration_ms."""
         self._hold(x, y, duration_ms)
 
+    def keyevent(self, key: str) -> None:
+        """Send a key event (e.g. 'KEYCODE_BACK', 'KEYCODE_HOME')."""
+        self._shell_retry(f"input keyevent {key}")
+
+    def swipe(
+        self,
+        x1: int, y1: int,
+        x2: int, y2: int,
+        duration_ms: int = 300,
+    ) -> None:
+        """Swipe from (x1, y1) to (x2, y2)."""
+        self._shell_retry(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
+
+    def shell(self, cmd: str) -> str:
+        """Run an arbitrary shell command on the device. Returns output."""
+        return self._device.shell(cmd)
+
     def _hold(self, x: int, y: int, duration_ms: int) -> None:
         """Simulate press via `input swipe` with same start/end."""
-        cmd = f"input swipe {x} {y} {x} {y} {duration_ms}"
+        self._shell_retry(f"input swipe {x} {y} {x} {y} {duration_ms}")
+
+    def _shell_retry(self, cmd: str) -> None:
+        """Execute a shell command with up to 3 retries."""
         for attempt in range(3):
             try:
                 self._device.shell(cmd)
@@ -103,7 +127,9 @@ class ADBController:
                 if attempt < 2:
                     time.sleep(1.0)
                     self._connect()
-        raise RuntimeError(f"ADB input failed after 3 attempts on {self._serial}")
+        raise ADBConnectionError(
+            f"ADB input failed after 3 attempts on {self._serial}"
+        )
 
     @property
     def serial(self) -> str:

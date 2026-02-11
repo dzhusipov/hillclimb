@@ -63,7 +63,7 @@ class Navigator:
         nav_start = time.time()
 
         while time.time() < deadline:
-            frame = self._cap.grab()
+            frame = self._cap.capture()
             state = self._vision.analyze(frame)
             gs = state.game_state
             elapsed = time.time() - nav_start
@@ -104,8 +104,8 @@ class Navigator:
 
             # Transition table
             if gs == GameState.MAIN_MENU:
-                print(f"  [NAV] → tap RACE button (1860, 570)")
-                self._ctrl.tap(1860, 570)
+                print(f"  [NAV] → tap RACE button ({cfg.race_button.x}, {cfg.race_button.y})")
+                self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
                 time.sleep(2.0)
 
             elif gs == GameState.VEHICLE_SELECT:
@@ -125,12 +125,7 @@ class Navigator:
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(0.3)
                 # BACK скипает экран "second chance" (машина висит в воздухе)
-                # Без этого игра ждёт ~30 сек свайп
-                import subprocess
-                subprocess.run(
-                    [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_BACK"],
-                    capture_output=True, timeout=5,
-                )
+                self._ctrl.keyevent("KEYCODE_BACK")
                 time.sleep(0.5)
 
             elif gs == GameState.TOUCH_TO_CONTINUE:
@@ -154,11 +149,7 @@ class Navigator:
                 print(f"  [NAV] → UNKNOWN state — BACK + tap center")
                 self._save_debug_frame(frame, "unknown")
                 # BACK может скипнуть second chance или другой попап
-                import subprocess
-                subprocess.run(
-                    [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_BACK"],
-                    capture_output=True, timeout=5,
-                )
+                self._ctrl.keyevent("KEYCODE_BACK")
                 time.sleep(0.5)
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 time.sleep(0.5)
@@ -171,18 +162,12 @@ class Navigator:
         Капча — overlay от другого процесса, ADB input tap не может до неё
         достучаться (INJECT_EVENTS permission). Решение: BACK → перезапуск игры.
         """
-        import subprocess
-
         print("  [CAPTCHA] Captcha detected — pressing BACK to dismiss")
-        # BACK закрывает overlay капчи
-        subprocess.run(
-            [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_BACK"],
-            capture_output=True, timeout=5,
-        )
+        self._ctrl.keyevent("KEYCODE_BACK")
         time.sleep(1.0)
 
         # Проверяем — ушла ли капча?
-        frame2 = self._cap.grab()
+        frame2 = self._cap.capture()
         state = self._vision.analyze(frame2)
         if state.game_state != GameState.CAPTCHA:
             print(f"  [CAPTCHA] BACK worked! state: {state.game_state.name}")
@@ -190,37 +175,24 @@ class Navigator:
 
         # BACK не помог — HOME + перезапуск игры
         print("  [CAPTCHA] BACK didn't work — HOME + relaunch")
-        subprocess.run(
-            [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_HOME"],
-            capture_output=True, timeout=5,
-        )
+        self._ctrl.keyevent("KEYCODE_HOME")
         time.sleep(2.0)
 
         # Перезапускаем HCR2
-        subprocess.run(
-            [cfg.adb_path, "shell", "monkey", "-p", "com.fingersoft.hcr2",
-             "-c", "android.intent.category.LAUNCHER", "1"],
-            capture_output=True, timeout=5,
+        self._ctrl.shell(
+            "monkey -p com.fingersoft.hcr2 "
+            "-c android.intent.category.LAUNCHER 1"
         )
         time.sleep(5.0)
         print("  [CAPTCHA] Game relaunched")
 
     def _fling(self) -> None:
         """Свайп вниз-вверх для 'fling' промо в Adventures (оттянуть и отпустить)."""
-        import subprocess
         # Свайп вниз от центра машины (оттягиваем)
-        subprocess.run(
-            [cfg.adb_path, "shell", "input", "swipe",
-             "1170", "400", "1170", "700", "300"],
-            capture_output=True, timeout=5,
-        )
+        self._ctrl.swipe(1170, 400, 1170, 700, 300)
         time.sleep(0.1)
         # Свайп вверх (отпускаем — запуск)
-        subprocess.run(
-            [cfg.adb_path, "shell", "input", "swipe",
-             "1170", "700", "1170", "300", "150"],
-            capture_output=True, timeout=5,
-        )
+        self._ctrl.swipe(1170, 700, 1170, 300, 150)
 
     def _dismiss_popups(self) -> None:
         """Закрыть попапы SKIP в обеих известных позициях."""
@@ -242,12 +214,17 @@ def main() -> None:
     from hillclimb.controller import ADBController
     from hillclimb.vision import VisionAnalyzer
 
-    ctrl = ADBController()
-    cap = ScreenCapture()
+    import argparse
+    parser = argparse.ArgumentParser(description="Test navigator")
+    parser.add_argument("--serial", default="localhost:5555", help="ADB serial")
+    args = parser.parse_args()
+
+    cap = ScreenCapture(adb_serial=args.serial)
+    ctrl = ADBController(adb_serial=args.serial)
     vis = VisionAnalyzer()
     nav = Navigator(ctrl, cap, vis)
 
-    print("Attempting to navigate to RACING state...")
+    print(f"Attempting to navigate to RACING state on {args.serial}...")
     ok = nav.ensure_racing()
     print(f"Result: {'success' if ok else 'failed'}")
 
