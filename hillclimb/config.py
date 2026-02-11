@@ -97,9 +97,10 @@ class Config:
     # Yellow distance text below RPM dial
     distance_text_roi: Rect = field(default_factory=lambda: Rect(x=245, y=425, w=110, h=25))
 
-    # -- Results screen OCR ROIs (calibrated) ---------------------------------
-    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=290, y=285, w=70, h=30))
-    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=430, y=285, w=100, h=30))
+    # -- Results screen OCR ROIs (calibrated for 800x480) ----------------------
+    # Bottom summary row: coin_icon + "30" ... car_icon + "188m"
+    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=272, y=308, w=70, h=30))
+    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=458, y=308, w=120, h=30))
 
     # Kept for backward compat
     coins_text_roi: Rect = field(default_factory=lambda: Rect(x=290, y=285, w=70, h=30))

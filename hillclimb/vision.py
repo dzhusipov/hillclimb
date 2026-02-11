@@ -78,6 +78,82 @@ class VisionState:
 # Vision analyser
 # ---------------------------------------------------------------------------
 
+def _classify_digit_heuristic(holes: int, fill: float) -> int:
+    """Fallback: classify a digit by contour hole count and fill ratio.
+
+    Returns digit 0-9, or -1 if unrecognized.
+    """
+    if holes >= 2:
+        return 8
+    if holes == 1:
+        if fill >= 0.70:
+            return 0
+        if fill < 0.55:
+            return 4
+        return 6  # 6 and 9 are similar
+    # 0 holes
+    if fill < 0.52:
+        return 1
+    if fill < 0.56:
+        return 7
+    return 5  # 2, 3, 5 are hard to distinguish
+
+
+# Results digit templates (loaded lazily)
+_results_templates: dict[int, np.ndarray] | None = None
+
+
+def _load_results_templates() -> dict[int, np.ndarray]:
+    """Load digit templates extracted from RESULTS screen."""
+    global _results_templates
+    if _results_templates is not None:
+        return _results_templates
+    _results_templates = {}
+    tdir = Path("templates/digits_results")
+    if not tdir.exists():
+        return _results_templates
+    for digit in range(10):
+        path = tdir / f"{digit}.png"
+        if path.exists():
+            tmpl = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+            if tmpl is not None:
+                _results_templates[digit] = tmpl
+    return _results_templates
+
+
+def _classify_digit(
+    digit_img: np.ndarray, holes: int, fill: float,
+) -> int:
+    """Classify a digit: template matching first, heuristic fallback.
+
+    Args:
+        digit_img: binary (white on black) cropped digit image.
+        holes: number of contour holes.
+        fill: pixel fill ratio within bounding box.
+    """
+    templates = _load_results_templates()
+    if templates:
+        best_digit = -1
+        best_score = 0.0
+        for d, tmpl in templates.items():
+            # Resize digit to template size for matching
+            resized = cv2.resize(digit_img, (tmpl.shape[1], tmpl.shape[0]),
+                                 interpolation=cv2.INTER_AREA)
+            _, resized = cv2.threshold(resized, 127, 255, cv2.THRESH_BINARY)
+            # Normalised correlation
+            score = cv2.matchTemplate(
+                resized, tmpl, cv2.TM_CCOEFF_NORMED,
+            )
+            s = float(score[0, 0]) if score.size == 1 else float(score.max())
+            if s > best_score:
+                best_score = s
+                best_digit = d
+        if best_score > 0.5:
+            return best_digit
+
+    return _classify_digit_heuristic(holes, fill)
+
+
 class VisionAnalyzer:
     """Processes a single BGR frame and returns a VisionState."""
 
@@ -164,8 +240,7 @@ class VisionAnalyzer:
         if orange_ratio > 0.05 and dark_ratio > 0.3:
             return GameState.DRIVER_DOWN
 
-        # 1b. OUT OF FUEL: red text/cans in upper half + white "TOUCH TO CONTINUE" bottom
-        #     Screen is BRIGHT (unlike DRIVER_DOWN dark overlay)
+        # 1b. OUT OF FUEL / TOUCH TO CONTINUE: red text in upper half
         bottom_strip = hsv[int(h * 0.8):, w // 4 : 3 * w // 4]
         bottom_white = np.mean(bottom_strip[:, :, 2] > 180)
         upper_half = hsv[:h // 2, w // 4 : 3 * w // 4]
@@ -178,8 +253,17 @@ class VisionAnalyzer:
                           np.array([180, 255, 255], dtype=np.uint8))
         )
         red_upper = np.mean(red_mask > 0)
-        if red_upper > 0.08 and bottom_white > 0.04:
-            return GameState.TOUCH_TO_CONTINUE
+        # Green RESPAWN button in center = OUT OF FUEL (treat as DRIVER_DOWN)
+        green_lower = np.array([35, 80, 80], dtype=np.uint8)
+        green_upper = np.array([85, 255, 255], dtype=np.uint8)
+        if red_upper > 0.08:
+            center_zone = hsv[h // 3 : 2 * h // 3, w // 4 : 3 * w // 4]
+            green_center = np.mean(
+                cv2.inRange(center_zone, green_lower, green_upper) > 0)
+            if green_center > 0.15:
+                return GameState.DRIVER_DOWN  # BACK skips respawn → results
+            if bottom_white > 0.04:
+                return GameState.TOUCH_TO_CONTINUE
 
         # 2. TOUCH_TO_CONTINUE: dark overlay with text at bottom
         #    Similar dark overlay but no orange burst; text prompt at bottom
@@ -217,15 +301,23 @@ class VisionAnalyzer:
                     return GameState.DRIVER_DOWN
                 return GameState.RACING
 
-        # 4. RESULTS: зелёные кнопки в обоих нижних углах (RETRY + NEXT)
+        # 4. RESULTS: зелёные кнопки внизу (RETRY слева, NEXT справа)
+        #    Иногда NEXT не видна (анимация) — достаточно RETRY + серая панель
         bottom_left = hsv[int(h * 0.85):, : w // 3]
         bottom_right = hsv[int(h * 0.85):, 2 * w // 3 :]
-        green_lower = np.array([35, 80, 80], dtype=np.uint8)
-        green_upper = np.array([85, 255, 255], dtype=np.uint8)
         green_bl = np.mean(cv2.inRange(bottom_left, green_lower, green_upper) > 0)
         green_br = np.mean(cv2.inRange(bottom_right, green_lower, green_upper) > 0)
         if green_bl > 0.08 and green_br > 0.08:
             return GameState.RESULTS
+        # Fallback: only RETRY visible + gray results panel in center
+        if green_bl > 0.08:
+            panel = hsv[int(h * 0.3):int(h * 0.7), w // 4 : 3 * w // 4]
+            panel_gray = (
+                (panel[:, :, 1] < 40) &  # low saturation
+                (panel[:, :, 2] > 140) & (panel[:, :, 2] < 210)  # mid brightness
+            )
+            if np.mean(panel_gray) > 0.12:
+                return GameState.RESULTS
 
         # 5. DOUBLE_COINS_POPUP: жёлтые монеты/2x сверху + синяя SKIP внизу
         #    Жёлтый в верхней-центральной зоне (монеты, "2x")
@@ -559,6 +651,7 @@ class VisionAnalyzer:
     ) -> tuple[int, float]:
         """Read coins and distance from the results screen.
 
+        Uses contour-based OCR: white bold text on gray panel.
         Returns:
             (coins, distance_m)
         """
@@ -567,13 +660,68 @@ class VisionAnalyzer:
 
         crop_coins = self._crop_roi(frame, cfg.results_coins_roi)
         if crop_coins is not None and crop_coins.size > 0:
-            coins = int(self._ocr_number_from_crop(crop_coins))
+            coins = int(self._ocr_white_text(crop_coins))
 
         crop_dist = self._crop_roi(frame, cfg.results_distance_roi)
         if crop_dist is not None and crop_dist.size > 0:
-            distance_m = self._ocr_number_from_crop(crop_dist)
+            distance_m = self._ocr_white_text(crop_dist)
 
         return coins, distance_m
+
+    @staticmethod
+    def _ocr_white_text(crop: np.ndarray) -> float:
+        """OCR for white bold text on gray background (RESULTS screen).
+
+        Segments digits via contour detection, classifies by hole count
+        and aspect ratio.
+        """
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 190, 255, cv2.THRESH_BINARY)
+
+        contours, hierarchy = cv2.findContours(
+            thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE,
+        )
+        if not contours or hierarchy is None:
+            return 0.0
+
+        # Collect top-level contours (digits + 'm')
+        digits_info: list[tuple[int, int, int, int, float, int]] = []
+        for i, h in enumerate(hierarchy[0]):
+            if h[3] != -1:  # skip children (holes)
+                continue
+            x, y, w, ht = cv2.boundingRect(contours[i])
+            if ht < 8 or w < 3:
+                continue
+            # Count holes
+            holes = 0
+            child = h[2]
+            while child != -1:
+                holes += 1
+                child = hierarchy[0][child][0]
+            area = cv2.contourArea(contours[i])
+            fill = area / (w * ht) if w * ht > 0 else 0.0
+            digits_info.append((x, w, ht, holes, fill, i))
+
+        if not digits_info:
+            return 0.0
+
+        digits_info.sort(key=lambda d: d[0])
+
+        # Classify each contour into a digit
+        value = 0
+        for x, w, ht, holes, fill, idx in digits_info:
+            aspect = w / ht
+            # Skip 'm' (wide, aspect > 1.2)
+            if aspect > 1.2:
+                continue
+            # Extract binary digit image for template matching
+            bx, by, bw, bh = cv2.boundingRect(contours[idx])
+            digit_img = thresh[by:by + bh, bx:bx + bw]
+            digit = _classify_digit(digit_img, holes, fill)
+            if digit >= 0:
+                value = value * 10 + digit
+
+        return float(value)
 
     # ------------------------------------------------------------------
     # Vehicle Tilt Detection (unchanged from original)
