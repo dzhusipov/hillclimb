@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HCR2 Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>HCR2 Dashboard</h1>
+        <span class="subtitle" id="emu-count"></span>
+    </header>
+
+    <div class="grid" id="emulator-grid">
+        {% for emu in emulators %}
+        <div class="card" id="card-{{ emu.id }}" data-id="{{ emu.id }}">
+            <div class="card-header">
+                <span class="card-title">{{ emu.name }}</span>
+                <span class="badge" id="badge-{{ emu.id }}">{{ emu.docker_status }}</span>
+            </div>
+            <div class="stream-container">
+                <img class="stream" src="/stream/{{ emu.id }}" alt="Stream {{ emu.name }}"
+                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                <div class="stream-placeholder">
+                    <span>Нет сигнала</span>
+                </div>
+            </div>
+            <div class="card-info">
+                <span class="info-label">Docker:</span>
+                <span class="info-value" id="docker-{{ emu.id }}">{{ emu.docker_status }}</span>
+                <span class="info-label">Загрузка:</span>
+                <span class="info-value" id="boot-{{ emu.id }}">{{ emu.boot_status }}</span>
+            </div>
+            <div class="card-actions">
+                <button class="btn btn-start" onclick="action({{ emu.id }}, 'start')" title="Запустить контейнер">
+                    &#9654; Старт
+                </button>
+                <button class="btn btn-stop" onclick="action({{ emu.id }}, 'stop')" title="Остановить контейнер">
+                    &#9632; Стоп
+                </button>
+                <button class="btn btn-restart" onclick="action({{ emu.id }}, 'restart')" title="Перезапустить контейнер">
+                    &#8635; Рестарт
+                </button>
+                <button class="btn btn-game-start" onclick="action({{ emu.id }}, 'start-game')" title="Запустить HCR2">
+                    &#127918; Игра
+                </button>
+                <button class="btn btn-game-stop" onclick="action({{ emu.id }}, 'stop-game')" title="Остановить HCR2">
+                    &#10060; Стоп игры
+                </button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

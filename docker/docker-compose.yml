@@ -95,6 +95,22 @@ services:
     networks:
       - hcr2-net
 
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: hcr2-dashboard
+    ports:
+      - "8150:8150"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - hcr2-0
+      - hcr2-1
+    restart: unless-stopped
+    networks:
+      - hcr2-net
+
 networks:
   hcr2-net:
     driver: bridge
