@@ -9,6 +9,28 @@
 
 ---
 
+## Прогресс выполнения
+
+### Шаг 1: environment.yml + requirements.txt — НЕ НАЧАТ
+Нужно обновить зависимости под NAS (CUDA 12.x, adbutils и т.д.)
+
+### Шаг 2: Docker инфраструктура + мониторинг (Фаза 0) — ВЫПОЛНЕН ~90%
+- [x] `docker/docker-compose.yml` — 8 ReDroid-контейнеров с profiles (default=2, scale-4, scale-8)
+- [x] `docker/.env` — конфигурация (NUM_EMULATORS, разрешение, RAM, CPU)
+- [x] `docker/Dockerfile.dashboard` — образ для веб-дашборда (FastAPI + OpenCV + ADB + Docker CLI)
+- [x] `docker/apk/` — APK файлы HCR2 v1.70.4 (base + x86_64 + en + mdpi)
+- [x] ws-scrcpy контейнер на порту 8100
+- [x] Веб-дашборд на порту 8150: MJPEG стримы, статусы, управление контейнерами, start/stop game
+- [x] CasaOS labels на dashboard и ws-scrcpy
+- [x] `scripts/manage.sh` — start/stop/restart/status/install-apk
+- [ ] **БАГ:** Touch input через дашборд — координаты не попадают в правильное место (маппинг norm→screen)
+- [ ] Установить и проверить HCR2 на эмуляторе через ws-scrcpy
+
+### Шаг 3–10: НЕ НАЧАТЫ
+Следующий шаг: **Шаг 3 — Capture + Vision + Controller (Фаза 1)**
+
+---
+
 ## Контекст проекта
 
 Текущее состояние: рабочий AI-агент для HCR, использующий OpenCV для парсинга экрана и PPO (Stable-Baselines3) для обучения. Работает на одном физическом Android-устройстве через scrcpy + ADB. Скорость ~10 FPS, обучение крайне медленное.
