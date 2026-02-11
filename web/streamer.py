@@ -30,11 +30,21 @@ class EmulatorStream:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._connected = False
+        self._rotated = False
+        self._capture_size: tuple[int, int] = (0, 0)  # (w, h) of raw capture
 
     @property
     def frame(self) -> Optional[bytes]:
         with self._lock:
             return self._frame
+
+    @property
+    def rotated(self) -> bool:
+        return self._rotated
+
+    @property
+    def capture_size(self) -> tuple[int, int]:
+        return self._capture_size
 
     def start(self) -> None:
         if self._running:
@@ -81,6 +91,15 @@ class EmulatorStream:
             img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             if img is None:
                 return None
+
+            # Track raw capture size and rotate portrait to landscape
+            h, w = img.shape[:2]
+            self._capture_size = (w, h)
+            if h > w:
+                self._rotated = True
+                img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            else:
+                self._rotated = False
 
             # Encode as JPEG
             encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
@@ -141,3 +160,10 @@ class StreamManager:
         if stream:
             return stream.frame
         return None
+
+    def get_stream_info(self, emu_id: int) -> tuple[bool, tuple[int, int]]:
+        """Return (rotated, (capture_w, capture_h)) for coordinate mapping."""
+        stream = self._streams.get(emu_id)
+        if stream and stream.capture_size != (0, 0):
+            return stream.rotated, stream.capture_size
+        return True, (480, 800)  # default: portrait, needs rotation

@@ -94,7 +94,7 @@ header h1 {
 .stream-container {
     position: relative;
     width: 100%;
-    aspect-ratio: 480 / 800;
+    aspect-ratio: 800 / 480;
     background: #0d1117;
     overflow: hidden;
 }
@@ -104,6 +104,10 @@ header h1 {
     height: 100%;
     object-fit: contain;
     display: block;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
 }
 
 .stream-placeholder {

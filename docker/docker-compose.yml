@@ -94,6 +94,14 @@ services:
     restart: unless-stopped
     networks:
       - hcr2-net
+    labels:
+      icon: https://cdn-icons-png.flaticon.com/512/545/545245.png
+      casaos.name: "ws-scrcpy"
+      casaos.title.en_us: "WS-Scrcpy"
+      casaos.description.en_us: "Web-based screen mirroring for Android emulators"
+      casaos.port.main: "8100"
+      casaos.web.port: "8100"
+      casaos.category: "Developer"
 
   dashboard:
     build:
@@ -110,6 +118,14 @@ services:
     restart: unless-stopped
     networks:
       - hcr2-net
+    labels:
+      icon: https://cdn-icons-png.flaticon.com/512/3612/3612569.png
+      casaos.name: "hcr2-dashboard"
+      casaos.title.en_us: "HCR2 Dashboard"
+      casaos.description.en_us: "Hill Climb Racing 2 AI training monitor & emulator control"
+      casaos.port.main: "8150"
+      casaos.web.port: "8150"
+      casaos.category: "Developer"
 
 networks:
   hcr2-net:

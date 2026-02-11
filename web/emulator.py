@@ -2,6 +2,7 @@
 
 import subprocess
 import logging
+import threading
 from dataclasses import dataclass, asdict
 
 logger = logging.getLogger(__name__)
@@ -142,3 +143,60 @@ def stop_game(emu_id: int) -> tuple[bool, str]:
     if rc == 0:
         return True, "Game stopped"
     return False, f"Failed to stop game: {out}"
+
+
+# --- Touch input ---
+
+_active_touches: dict[int, subprocess.Popen] = {}
+_touch_lock = threading.Lock()
+
+
+def _map_coords(
+    norm_x: float, norm_y: float,
+    rotated: bool, cap_w: int, cap_h: int,
+) -> tuple[int, int]:
+    """Map normalized landscape coords to emulator screen coords."""
+    if rotated:
+        # Stream was rotated 90° CW from portrait (cap_w x cap_h).
+        # Reverse: screen_x = norm_y * cap_w, screen_y = (1-norm_x) * cap_h
+        screen_x = int(norm_y * cap_w)
+        screen_y = int((1.0 - norm_x) * cap_h)
+    else:
+        # Landscape capture displayed directly
+        screen_x = int(norm_x * cap_w)
+        screen_y = int(norm_y * cap_h)
+    return max(0, screen_x), max(0, screen_y)
+
+
+def touch_down(
+    emu_id: int, norm_x: float, norm_y: float,
+    rotated: bool, cap_w: int, cap_h: int,
+) -> tuple[bool, str]:
+    """Start a touch (press) at normalized coordinates."""
+    host = f"hcr2-{emu_id}:5555"
+    _ensure_connected(host)
+    x, y = _map_coords(norm_x, norm_y, rotated, cap_w, cap_h)
+
+    # Kill any existing touch first
+    touch_up(emu_id)
+
+    # Start a 30s swipe-in-place (acts as a sustained press)
+    proc = subprocess.Popen(
+        ["adb", "-s", host, "shell", "input", "swipe",
+         str(x), str(y), str(x), str(y), "30000"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    with _touch_lock:
+        _active_touches[emu_id] = proc
+    return True, f"Touch down ({x}, {y})"
+
+
+def touch_up(emu_id: int) -> tuple[bool, str]:
+    """Release an active touch."""
+    with _touch_lock:
+        proc = _active_touches.pop(emu_id, None)
+    if proc:
+        proc.kill()
+        proc.wait()
+        return True, "Touch up"
+    return True, "No active touch"

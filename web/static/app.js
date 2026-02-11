@@ -1,6 +1,8 @@
-// HCR2 Dashboard — status polling & control
+// HCR2 Dashboard — status polling, control & touch input
 
 const POLL_INTERVAL = 3000;
+
+// --- Status polling ---
 
 function updateBadge(id, dockerStatus) {
     const badge = document.getElementById(`badge-${id}`);
@@ -51,7 +53,6 @@ function action(id, act) {
         .then(r => r.json())
         .then(data => {
             showToast(data.message, data.ok);
-            // Refresh status after action
             setTimeout(updateStatus, 1000);
         })
         .catch(err => {
@@ -62,6 +63,88 @@ function action(id, act) {
         });
 }
 
-// Initial status update & polling
+// --- Touch input ---
+
+function getNormCoords(img, clientX, clientY) {
+    const rect = img.getBoundingClientRect();
+
+    // Account for object-fit: contain (image may not fill the whole element)
+    const natW = img.naturalWidth || rect.width;
+    const natH = img.naturalHeight || rect.height;
+    const imgAspect = natW / natH;
+    const elemAspect = rect.width / rect.height;
+
+    let displayW, displayH, offsetX, offsetY;
+    if (imgAspect > elemAspect) {
+        displayW = rect.width;
+        displayH = rect.width / imgAspect;
+        offsetX = 0;
+        offsetY = (rect.height - displayH) / 2;
+    } else {
+        displayH = rect.height;
+        displayW = rect.height * imgAspect;
+        offsetX = (rect.width - displayW) / 2;
+        offsetY = 0;
+    }
+
+    const x = (clientX - rect.left - offsetX) / displayW;
+    const y = (clientY - rect.top - offsetY) / displayH;
+    return {
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y))
+    };
+}
+
+function sendTouch(emuId, action, x, y) {
+    fetch(`/api/emulator/${emuId}/touch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, x: x || 0, y: y || 0 })
+    }).catch(err => console.error('Touch failed:', err));
+}
+
+function setupTouchHandlers() {
+    document.querySelectorAll('.stream').forEach(img => {
+        const emuId = img.closest('.card').dataset.id;
+
+        // Mouse events
+        img.addEventListener('mousedown', e => {
+            e.preventDefault();
+            const coords = getNormCoords(img, e.clientX, e.clientY);
+            sendTouch(emuId, 'down', coords.x, coords.y);
+        });
+
+        img.addEventListener('mouseup', e => {
+            e.preventDefault();
+            sendTouch(emuId, 'up');
+        });
+
+        img.addEventListener('mouseleave', e => {
+            // Release touch if cursor leaves the stream
+            sendTouch(emuId, 'up');
+        });
+
+        // Touch events (mobile)
+        img.addEventListener('touchstart', e => {
+            e.preventDefault();
+            const touch = e.touches[0];
+            const coords = getNormCoords(img, touch.clientX, touch.clientY);
+            sendTouch(emuId, 'down', coords.x, coords.y);
+        });
+
+        img.addEventListener('touchend', e => {
+            e.preventDefault();
+            sendTouch(emuId, 'up');
+        });
+
+        img.addEventListener('touchcancel', e => {
+            sendTouch(emuId, 'up');
+        });
+    });
+}
+
+// --- Init ---
+
 updateStatus();
 setInterval(updateStatus, POLL_INTERVAL);
+setupTouchHandlers();

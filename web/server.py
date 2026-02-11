@@ -10,6 +10,8 @@ from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from pydantic import BaseModel
+
 from web.emulator import (
     get_all_status,
     restart_emulator,
@@ -17,8 +19,16 @@ from web.emulator import (
     stop_emulator,
     start_game,
     stop_game,
+    touch_down,
+    touch_up,
 )
 from web.streamer import StreamManager
+
+
+class TouchEvent(BaseModel):
+    action: str  # "down" or "up"
+    x: float = 0.0  # normalized 0..1
+    y: float = 0.0  # normalized 0..1
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -131,3 +141,15 @@ async def api_stop_game(emu_id: int):
         content={"ok": ok, "message": msg},
         status_code=200 if ok else 500,
     )
+
+
+@app.post("/api/emulator/{emu_id}/touch")
+async def api_touch(emu_id: int, event: TouchEvent):
+    if event.action == "down":
+        rotated, (cap_w, cap_h) = stream_manager.get_stream_info(emu_id)
+        ok, msg = touch_down(emu_id, event.x, event.y, rotated, cap_w, cap_h)
+    elif event.action == "up":
+        ok, msg = touch_up(emu_id)
+    else:
+        return JSONResponse(content={"ok": False, "message": "Unknown action"}, status_code=400)
+    return JSONResponse(content={"ok": ok, "message": msg})
