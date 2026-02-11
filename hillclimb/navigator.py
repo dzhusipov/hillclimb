@@ -38,6 +38,7 @@ class Navigator:
         self._same_state_count = 0
         self._prev_state: GameState | None = None
         self._racing_stuck_count = 0
+        self._captcha_relaunch_count = 0
 
     def _save_debug_frame(self, frame: np.ndarray, label: str) -> None:
         """Save a debug frame to logs/nav_debug/ for later analysis."""
@@ -97,6 +98,7 @@ class Navigator:
 
             # Already racing — done
             if gs == GameState.RACING:
+                self._captcha_relaunch_count = 0  # reset on successful recovery
                 # Проверяем "fling" промо: рука на экране, машина стоит
                 # Если speed ≈ 0 несколько циклов подряд → свайп (оттянуть и отпустить)
                 try:
@@ -173,30 +175,56 @@ class Navigator:
         time.sleep(1.0)
         self._ctrl.shell("am start -n com.fingersoft.hcr2/.AppActivity")
         time.sleep(5.0)
-
-    def _solve_captcha(self, frame: np.ndarray) -> None:
-        """Обойти проверку 'ARE YOU A ROBOT?'.
-
-        Капча — overlay от другого процесса, ADB input tap не может до неё
-        достучаться (INJECT_EVENTS permission). Решение: BACK → перезапуск игры.
-        """
-        print("  [CAPTCHA] Captcha detected — pressing BACK to dismiss")
-        self._ctrl.keyevent("KEYCODE_BACK")
+        # Dismiss "Viewing full screen" + OFFLINE popup by tapping GOT IT then ADVENTURE tab
+        self._ctrl.tap(500, 202)
+        time.sleep(0.3)
+        self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+        time.sleep(3.0)
+        # OFFLINE popup may appear after a delay — tap ADVENTURE again
+        self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
         time.sleep(1.0)
 
-        # Проверяем — ушла ли капча?
+    def _solve_captcha(self, frame: np.ndarray) -> None:
+        """Обойти CAPTCHA ('ARE YOU A ROBOT?') или OFFLINE popup.
+
+        Стратегия:
+        1. BACK — может скипнуть OFFLINE popup
+        2. Tap ADVENTURE — закрывает OFFLINE popup наверняка
+        3. HOME + relaunch — крайняя мера (настоящая CAPTCHA)
+        After 2 failed relaunches, give up (real CAPTCHA persists).
+        """
+        # If already relaunched 2+ times, don't keep looping
+        if self._captcha_relaunch_count >= 2:
+            print("  [CAPTCHA] Giving up after 2 relaunches — real CAPTCHA persists")
+            return
+
+        # Step 1: BACK
+        print("  [CAPTCHA] Pressing BACK...")
+        self._ctrl.keyevent("KEYCODE_BACK")
+        time.sleep(0.5)
         frame2 = self._cap.capture()
         state = self._vision.analyze(frame2)
         if state.game_state != GameState.CAPTCHA:
-            print(f"  [CAPTCHA] BACK worked! state: {state.game_state.name}")
+            print(f"  [CAPTCHA] BACK worked → {state.game_state.name}")
+            self._captcha_relaunch_count = 0
             return
 
-        # BACK не помог — HOME + перезапуск игры
-        print("  [CAPTCHA] BACK didn't work — HOME + relaunch")
+        # Step 2: tap ADVENTURE tab (dismisses OFFLINE popup)
+        print("  [CAPTCHA] Trying ADVENTURE tap...")
+        self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+        time.sleep(1.5)
+        frame3 = self._cap.capture()
+        state = self._vision.analyze(frame3)
+        if state.game_state != GameState.CAPTCHA:
+            print(f"  [CAPTCHA] ADVENTURE tap worked → {state.game_state.name}")
+            self._captcha_relaunch_count = 0
+            return
+
+        # Step 3: real CAPTCHA — HOME + relaunch
+        self._captcha_relaunch_count += 1
+        print(f"  [CAPTCHA] Real CAPTCHA — HOME + relaunch (attempt {self._captcha_relaunch_count})")
         self._ctrl.keyevent("KEYCODE_HOME")
         time.sleep(2.0)
-
-        # Перезапускаем HCR2
         self._relaunch_game()
         print("  [CAPTCHA] Game relaunched")
 

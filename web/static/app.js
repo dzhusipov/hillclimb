@@ -143,8 +143,36 @@ function setupTouchHandlers() {
     });
 }
 
+// --- Snapshot polling (avoids browser 6-connection limit for MJPEG) ---
+
+const SNAPSHOT_INTERVAL = 800;  // ms between snapshot refreshes
+
+function refreshSnapshots() {
+    document.querySelectorAll('.stream').forEach(img => {
+        const emuId = img.dataset.emuId;
+        if (emuId === undefined) return;
+        // Only refresh if previous load finished (avoid piling up requests)
+        if (img.dataset.loading === 'true') return;
+        img.dataset.loading = 'true';
+        const newImg = new Image();
+        newImg.onload = () => {
+            img.src = newImg.src;
+            img.style.display = 'block';
+            const placeholder = img.nextElementSibling;
+            if (placeholder) placeholder.style.display = 'none';
+            img.dataset.loading = 'false';
+        };
+        newImg.onerror = () => {
+            img.dataset.loading = 'false';
+        };
+        newImg.src = `/snapshot/${emuId}?t=${Date.now()}`;
+    });
+}
+
 // --- Init ---
 
 updateStatus();
 setInterval(updateStatus, POLL_INTERVAL);
+refreshSnapshots();
+setInterval(refreshSnapshots, SNAPSHOT_INTERVAL);
 setupTouchHandlers();

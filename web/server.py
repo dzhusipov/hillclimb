@@ -68,7 +68,7 @@ async def dashboard(request: Request):
 
 @app.get("/stream/{emu_id}")
 async def video_stream(emu_id: int):
-    # Ensure stream is running
+    """MJPEG stream (legacy, limited by browser connection pool)."""
     stream_manager.get_or_create(emu_id)
 
     async def generate():
@@ -85,6 +85,18 @@ async def video_stream(emu_id: int):
         generate(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@app.get("/snapshot/{emu_id}")
+async def snapshot(emu_id: int):
+    """Single JPEG snapshot (used by polling-based display for >6 emus)."""
+    from fastapi.responses import Response
+    stream_manager.get_or_create(emu_id)
+    frame = stream_manager.get_frame(emu_id)
+    if frame:
+        return Response(content=frame, media_type="image/jpeg",
+                        headers={"Cache-Control": "no-cache"})
+    return Response(status_code=204)
 
 
 @app.get("/api/status")

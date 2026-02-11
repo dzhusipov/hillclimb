@@ -10,32 +10,37 @@ from hillclimb.config import cfg
 
 
 class EpisodeLogCallback:
-    """Callback для логирования каждого эпизода в консоль."""
+    """Callback для логирования каждого эпизода в консоль (multi-env aware)."""
 
-    def __init__(self):
+    def __init__(self, num_envs: int = 1):
         from stable_baselines3.common.callbacks import BaseCallback
 
         class _Inner(BaseCallback):
             def __init__(inner_self):
                 super().__init__()
+                inner_self._num_envs = num_envs
                 inner_self._episode_count = 0
-                inner_self._episode_start = time.time()
-                inner_self._episode_rewards = 0.0
-                inner_self._episode_steps = 0
+                inner_self._episode_rewards = [0.0] * num_envs
+                inner_self._episode_steps = [0] * num_envs
+                inner_self._episode_starts = [time.time()] * num_envs
                 inner_self._best_distance = 0.0
                 inner_self._train_start = time.time()
 
             def _on_step(inner_self) -> bool:
-                inner_self._episode_steps += 1
                 infos = inner_self.locals.get("infos", [])
-                rewards = inner_self.locals.get("rewards", [0])
-                inner_self._episode_rewards += float(rewards[0])
+                rewards = inner_self.locals.get("rewards", [])
+                dones = inner_self.locals.get("dones", [])
 
-                for info in infos:
-                    if "episode" in info or info.get("game_state") == "RESULTS":
+                for i in range(min(len(infos), inner_self._num_envs)):
+                    inner_self._episode_steps[i] += 1
+                    if i < len(rewards):
+                        inner_self._episode_rewards[i] += float(rewards[i])
+
+                    info = infos[i]
+                    done = dones[i] if i < len(dones) else False
+                    if done or "episode" in info:
                         inner_self._episode_count += 1
-                        dt = time.time() - inner_self._episode_start
-                        # max_distance_m из RACING шагов (надёжнее results OCR)
+                        dt = time.time() - inner_self._episode_starts[i]
                         dist = info.get("max_distance_m", info.get("distance_m", 0))
                         if dist > inner_self._best_distance:
                             inner_self._best_distance = dist
@@ -43,17 +48,18 @@ class EpisodeLogCallback:
                         gs = info.get("game_state", "?")
                         print(
                             f"  EP {inner_self._episode_count:3d} | "
-                            f"{inner_self._episode_steps:4d} steps | "
+                            f"env={i} | "
+                            f"{inner_self._episode_steps[i]:4d} steps | "
                             f"{dt:5.1f}s | "
-                            f"R={inner_self._episode_rewards:+7.1f} | "
+                            f"R={inner_self._episode_rewards[i]:+7.1f} | "
                             f"dist={dist:.0f}m | "
                             f"best={inner_self._best_distance:.0f}m | "
                             f"{inner_self.num_timesteps}/{inner_self.locals.get('total_timesteps', '?')} | "
                             f"{total_t/60:.1f}min | {gs}"
                         )
-                        inner_self._episode_rewards = 0.0
-                        inner_self._episode_steps = 0
-                        inner_self._episode_start = time.time()
+                        inner_self._episode_rewards[i] = 0.0
+                        inner_self._episode_steps[i] = 0
+                        inner_self._episode_starts[i] = time.time()
                 return True
 
         self._cls = _Inner
@@ -62,8 +68,17 @@ class EpisodeLogCallback:
         return self._cls()
 
 
+def make_env(adb_serial: str, render_mode: str | None = None):
+    """Factory function for SubprocVecEnv."""
+    def _init():
+        from hillclimb.env import HillClimbEnv
+        return HillClimbEnv(adb_serial=adb_serial, render_mode=render_mode)
+    return _init
+
+
 def train(
     total_timesteps: int | None = None,
+    num_envs: int = 1,
     render: bool = False,
     resume: str | None = None,
 ) -> None:
@@ -71,27 +86,37 @@ def train(
     import torch
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
+    from stable_baselines3.common.vec_env import SubprocVecEnv
 
     from hillclimb.env import HillClimbEnv
 
     total_timesteps = total_timesteps or cfg.total_timesteps
 
-    # MlpPolicy быстрее на CPU чем на MPS (нет CNN — нет смысла в GPU)
     device = "cpu"
     if torch.cuda.is_available():
         device = "cuda"
     print(f"Device: {device}")
 
-    # n_steps для коротких прогонов: min(2048, total_timesteps)
-    n_steps = min(cfg.n_steps, total_timesteps)
+    # n_steps per env; with SubprocVecEnv effective rollout = n_steps * num_envs
+    n_steps = min(cfg.n_steps, max(total_timesteps // num_envs, 1))
 
-    # Environment
+    # Environment(s)
     render_mode = "human" if render else None
-    env = HillClimbEnv(render_mode=render_mode)
+    serials = [cfg.emulator_serial(i) for i in range(num_envs)]
+    print(f"Emulators ({num_envs}): {', '.join(serials)}")
+
+    if num_envs == 1:
+        env = HillClimbEnv(adb_serial=serials[0], render_mode=render_mode)
+    else:
+        env = SubprocVecEnv([make_env(s, render_mode) for s in serials])
 
     # Model directory
     model_dir = Path(cfg.model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
+
+    # batch_size must be <= n_steps * num_envs
+    effective_rollout = n_steps * num_envs
+    batch_size = min(cfg.batch_size, effective_rollout)
 
     # Create or resume model
     if resume:
@@ -102,7 +127,7 @@ def train(
             "MlpPolicy",
             env,
             learning_rate=cfg.learning_rate,
-            batch_size=min(cfg.batch_size, n_steps),
+            batch_size=batch_size,
             n_steps=n_steps,
             verbose=1,
             device=device,
@@ -115,11 +140,11 @@ def train(
         save_path=str(model_dir / "checkpoints"),
         name_prefix="ppo_hillclimb",
     )
-    episode_cb = EpisodeLogCallback().create()
+    episode_cb = EpisodeLogCallback(num_envs=num_envs).create()
 
-    print(f"Training for {total_timesteps} timesteps (n_steps={n_steps})")
-    print(f"Config: lr={cfg.learning_rate}, batch={min(cfg.batch_size, n_steps)}")
-    print(f"Actions: Discrete(7) — gas[500,1000,2000,3000,5000]мс + brake[300,800]мс (5:2)")
+    print(f"Training for {total_timesteps} timesteps (n_steps={n_steps}, batch={batch_size})")
+    print(f"Config: lr={cfg.learning_rate}, envs={num_envs}, rollout={effective_rollout}")
+    print(f"Actions: Discrete(3) — 0=nothing, 1=gas, 2=brake")
     print("-" * 70)
 
     save_path = model_dir / "ppo_hillclimb"
@@ -149,6 +174,8 @@ def main() -> None:
                         help=f"Total timesteps (default: {cfg.total_timesteps})")
     parser.add_argument("--episodes", type=int, default=None,
                         help="Approximate episodes (converted to timesteps, ~200 steps/episode)")
+    parser.add_argument("--num-envs", type=int, default=cfg.num_emulators,
+                        help=f"Number of parallel environments (default: {cfg.num_emulators})")
     parser.add_argument("--render", action="store_true",
                         help="Show debug window during training")
     parser.add_argument("--resume", type=str, default=None,
@@ -159,7 +186,12 @@ def main() -> None:
     if timesteps is None and args.episodes is not None:
         timesteps = args.episodes * 200
 
-    train(total_timesteps=timesteps, render=args.render, resume=args.resume)
+    train(
+        total_timesteps=timesteps,
+        num_envs=args.num_envs,
+        render=args.render,
+        resume=args.resume,
+    )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HCR2 Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
     <header>
@@ -20,8 +20,7 @@
                 <span class="badge" id="badge-{{ emu.id }}">{{ emu.docker_status }}</span>
             </div>
             <div class="stream-container">
-                <img class="stream" src="/stream/{{ emu.id }}" alt="Stream {{ emu.name }}"
-                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                <img class="stream" data-emu-id="{{ emu.id }}" alt="Stream {{ emu.name }}">
                 <div class="stream-placeholder">
                     <span>Нет сигнала</span>
                 </div>
@@ -53,6 +52,6 @@
         {% endfor %}
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=2"></script>
 </body>
 </html>

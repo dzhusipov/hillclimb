@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import time
 
 import gymnasium as gym
@@ -62,6 +63,10 @@ class HillClimbEnv(gym.Env):
             self._controller, self._capture, self._vision,
         )
 
+        # Container name for watchdog restart
+        port = int(adb_serial.split(":")[-1])
+        self._container_name = f"hcr2-{port - 5555}"
+
         self._prev_state: VisionState | None = None
         self._step_count = 0
         self._max_distance_m = 0.0
@@ -84,19 +89,26 @@ class HillClimbEnv(gym.Env):
             if not ok:
                 time.sleep(2.0)
                 self._navigator.restart_game(timeout=20.0)
-        except ADBConnectionError:
-            print(f"[ENV {self._serial}] ADB connection lost during reset — waiting 10s...")
-            time.sleep(10.0)
+        except (ADBConnectionError, RuntimeError) as e:
+            print(f"[ENV {self._serial}] Error during reset: {e} — restarting container...")
+            self._restart_container()
             try:
-                self._navigator.restart_game(timeout=20.0)
+                self._navigator.restart_game(timeout=30.0)
             except Exception:
-                raise ADBConnectionError(
-                    f"ADB connection lost on {self._serial} and could not recover."
-                )
+                print(f"[ENV {self._serial}] Still failing after container restart")
 
         time.sleep(0.5)
 
-        frame = self._capture.capture()
+        try:
+            frame = self._capture.capture()
+        except (RuntimeError, Exception):
+            # Return zero observation — SB3 will call step() which will end episode
+            self._prev_state = None
+            self._step_count = 0
+            self._max_distance_m = 0.0
+            self._zero_speed_count = 0
+            return np.zeros(8, dtype=np.float32), {}
+
         state = self._vision.analyze(frame)
         self._prev_state = state
         self._step_count = 0
@@ -115,8 +127,8 @@ class HillClimbEnv(gym.Env):
         # Execute action
         try:
             self._controller.execute(action_enum, duration_ms=cfg.action_hold_ms)
-        except ADBConnectionError:
-            print(f"[ENV {self._serial}] ADB connection lost during step — ending episode")
+        except (ADBConnectionError, RuntimeError):
+            print(f"[ENV {self._serial}] ADB error during step — ending episode")
             obs = self._prev_state.to_array() if self._prev_state else np.zeros(8, dtype=np.float32)
             return obs, -10.0, True, False, {
                 "game_state": "ADB_DISCONNECTED",
@@ -124,7 +136,17 @@ class HillClimbEnv(gym.Env):
                 "step": self._step_count,
             }
 
-        frame = self._capture.capture()
+        try:
+            frame = self._capture.capture()
+        except (RuntimeError, Exception) as e:
+            print(f"[ENV {self._serial}] Capture failed: {e} — ending episode")
+            obs = self._prev_state.to_array() if self._prev_state else np.zeros(8, dtype=np.float32)
+            return obs, -10.0, True, False, {
+                "game_state": "CAPTURE_FAILED",
+                "max_distance_m": self._max_distance_m,
+                "step": self._step_count,
+            }
+
         state = self._vision.analyze(frame)
 
         # Mid-race popup: CAPTCHA and DOUBLE_COINS can interrupt racing
@@ -187,6 +209,36 @@ class HillClimbEnv(gym.Env):
             cv2.waitKey(1)
 
         return state.to_array(), reward, terminated, truncated, info
+
+    def _restart_container(self) -> None:
+        """Restart the Docker container and reconnect ADB."""
+        print(f"[ENV {self._serial}] Restarting container {self._container_name}...")
+        try:
+            subprocess.run(
+                ["docker", "restart", self._container_name],
+                timeout=60, capture_output=True,
+            )
+        except Exception as e:
+            print(f"[ENV {self._serial}] docker restart failed: {e}")
+            return
+        print(f"[ENV {self._serial}] Container restarted, waiting for boot...")
+        time.sleep(15)
+        # Reconnect
+        self._capture = ScreenCapture(adb_serial=self._serial)
+        self._controller = ADBController(
+            adb_serial=self._serial,
+            gas_x=cfg.gas_button.x,
+            gas_y=cfg.gas_button.y,
+            brake_x=cfg.brake_button.x,
+            brake_y=cfg.brake_button.y,
+            action_hold_ms=cfg.action_hold_ms,
+        )
+        self._navigator = Navigator(
+            self._controller, self._capture, self._vision,
+        )
+        self._controller.shell("am start -n com.fingersoft.hcr2/.AppActivity")
+        time.sleep(8)
+        print(f"[ENV {self._serial}] Recovery complete")
 
     def close(self) -> None:
         self._capture.close()

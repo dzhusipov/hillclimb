@@ -211,19 +211,38 @@ class VisionAnalyzer:
         h, w = frame.shape[:2]
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-        # 0. CAPTCHA: "ARE YOU A ROBOT?" — попап с роботом
-        #    Верхние 8%: почти полностью тёмные (>0.7)
-        #    Боковые края тоже тёмные (>0.6) — попап перекрывает игру
-        #    RACING: top8_dark~0.05, DRIVER_DOWN: edges не тёмные
-        top_8 = hsv[:int(h * 0.08), :]
-        t8_dark = np.mean(top_8[:, :, 2] < 80)
-        if t8_dark > 0.7:
-            left_e = hsv[:, :int(w * 0.08)]
-            right_e = hsv[:, int(w * 0.92):]
-            edges_dark = (np.mean(left_e[:, :, 2] < 80) +
-                          np.mean(right_e[:, :, 2] < 80)) / 2
-            if edges_dark > 0.6:
-                return GameState.CAPTCHA
+        # 0. CAPTCHA ("ARE YOU A ROBOT?"): dark overlay covering entire screen.
+        #    Real CAPTCHA has very low overall brightness (~35).
+        #    Main menu with OFFLINE badge has dark top bar but bright center (~95).
+        #    Dark racing maps have visible dials with red needles.
+        overall_v = np.mean(hsv[:, :, 2])
+        if overall_v < 75:
+            top_8 = hsv[:int(h * 0.08), :]
+            t8_dark = np.mean(top_8[:, :, 2] < 80)
+            if t8_dark > 0.7:
+                left_e = hsv[:, :int(w * 0.08)]
+                right_e = hsv[:, int(w * 0.92):]
+                edges_dark = (np.mean(left_e[:, :, 2] < 80) +
+                              np.mean(right_e[:, :, 2] < 80)) / 2
+                if edges_dark > 0.6:
+                    # Guard: if RPM dial with red needle visible → dark map, not CAPTCHA
+                    _dial = self._crop_circle_roi(frame, cfg.rpm_dial_roi)
+                    _is_racing = False
+                    if _dial is not None:
+                        _dh = cv2.cvtColor(_dial, cv2.COLOR_BGR2HSV)
+                        _db = np.mean(_dh[:, :, 2])
+                        _nm = (
+                            cv2.inRange(_dh,
+                                        np.array(cfg.needle_hsv_lower1, dtype=np.uint8),
+                                        np.array(cfg.needle_hsv_upper1, dtype=np.uint8))
+                            | cv2.inRange(_dh,
+                                          np.array(cfg.needle_hsv_lower2, dtype=np.uint8),
+                                          np.array(cfg.needle_hsv_upper2, dtype=np.uint8))
+                        )
+                        if _db > 30 and np.mean(_nm > 0) > 0.025:
+                            _is_racing = True
+                    if not _is_racing:
+                        return GameState.CAPTCHA
 
         # 1. DRIVER_DOWN: orange star burst in upper-center area
         #    Screen has dark overlay + orange/yellow "DRIVER DOWN" text

@@ -53,7 +53,7 @@ class Config:
     capture_backend: str = "png"  # "png" or "raw"
 
     # -- Emulators (for parallel training) ------------------------------------
-    num_emulators: int = 2
+    num_emulators: int = 8
     adb_port_base: int = 5555
 
     # -- Gas / Brake (800x480 landscape, calibrated) --------------------------
