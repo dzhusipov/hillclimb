@@ -129,33 +129,43 @@ class TestDialGaugeReader:
     def test_needle_at_min_angle(self, analyzer: VisionAnalyzer):
         """Needle at min angle should read ~0.0."""
         dial = cfg.rpm_dial_roi
-        frame = self._make_dial_frame(cfg.needle_min_angle, dial)
+        frame = self._make_dial_frame(cfg.rpm_needle_min_angle, dial)
         buf: deque[float] = deque(maxlen=5)
-        val = analyzer._read_dial_gauge(frame, dial, buf)
+        val = analyzer._read_dial_gauge(
+            frame, dial, buf,
+            cfg.rpm_needle_min_angle, cfg.rpm_needle_max_angle)
         assert val < 0.3  # close to 0
 
     def test_needle_at_max_angle(self, analyzer: VisionAnalyzer):
         """Needle at max angle should read ~1.0."""
         dial = cfg.rpm_dial_roi
-        frame = self._make_dial_frame(cfg.needle_max_angle, dial)
+        frame = self._make_dial_frame(cfg.rpm_needle_max_angle, dial)
         buf: deque[float] = deque(maxlen=5)
-        val = analyzer._read_dial_gauge(frame, dial, buf)
+        val = analyzer._read_dial_gauge(
+            frame, dial, buf,
+            cfg.rpm_needle_min_angle, cfg.rpm_needle_max_angle)
         assert val > 0.7  # close to 1
 
     def test_needle_at_mid_angle(self, analyzer: VisionAnalyzer):
         """Needle at midpoint angle should read ~0.5."""
         dial = cfg.rpm_dial_roi
-        mid_angle = (cfg.needle_min_angle + cfg.needle_max_angle) / 2
+        # CW angular midpoint (not arithmetic mean, which doesn't work for wrapped angles)
+        total_sweep = (cfg.rpm_needle_min_angle - cfg.rpm_needle_max_angle) % 360
+        mid_angle = cfg.rpm_needle_min_angle - total_sweep / 2
         frame = self._make_dial_frame(mid_angle, dial)
         buf: deque[float] = deque(maxlen=5)
-        val = analyzer._read_dial_gauge(frame, dial, buf)
+        val = analyzer._read_dial_gauge(
+            frame, dial, buf,
+            cfg.rpm_needle_min_angle, cfg.rpm_needle_max_angle)
         assert 0.2 < val < 0.8  # roughly mid-range
 
     def test_no_needle_returns_zero(self, analyzer: VisionAnalyzer):
         """Empty dial (no red pixels) should return 0."""
         frame = np.zeros((1080, 2340, 3), dtype=np.uint8)
         buf: deque[float] = deque(maxlen=5)
-        val = analyzer._read_dial_gauge(frame, cfg.rpm_dial_roi, buf)
+        val = analyzer._read_dial_gauge(
+            frame, cfg.rpm_dial_roi, buf,
+            cfg.rpm_needle_min_angle, cfg.rpm_needle_max_angle)
         assert val == pytest.approx(0.0)
 
 
@@ -215,16 +225,17 @@ class TestGameStateClassifier:
     def test_generic_frame_with_dials_is_racing(self, analyzer: VisionAnalyzer):
         """Frame with dial + red needle -> RACING."""
         import cv2
-        frame = np.full((1080, 2340, 3), 120, dtype=np.uint8)
+        frame = np.full((480, 800, 3), 120, dtype=np.uint8)
         roi = cfg.rpm_dial_roi
         # Draw dial background
         cv2.circle(frame, (roi.cx, roi.cy), roi.radius, (100, 100, 100), -1)
-        # Draw red needle line (required for RACING detection)
-        mid_angle = (cfg.needle_min_angle + cfg.needle_max_angle) / 2
+        # Draw thick red needle (must exceed 2.5% of dial crop for detection)
+        total_sweep = (cfg.rpm_needle_min_angle - cfg.rpm_needle_max_angle) % 360
+        mid_angle = cfg.rpm_needle_min_angle - total_sweep / 2
         rad = math.radians(mid_angle)
         ex = int(roi.cx + roi.radius * 0.8 * math.cos(rad))
         ey = int(roi.cy - roi.radius * 0.8 * math.sin(rad))
-        cv2.line(frame, (roi.cx, roi.cy), (ex, ey), (0, 0, 255), 3)
+        cv2.line(frame, (roi.cx, roi.cy), (ex, ey), (0, 0, 255), 8)
         state = analyzer._classify_state(frame)
         assert state == GameState.RACING
 

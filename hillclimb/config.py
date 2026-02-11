@@ -82,9 +82,13 @@ class Config:
     needle_hsv_lower2: list[int] = field(default_factory=lambda: [170, 100, 100])
     needle_hsv_upper2: list[int] = field(default_factory=lambda: [180, 255, 255])
 
-    # -- Needle angle calibration (atan2 convention: 0=right, CCW+) -----------
-    needle_min_angle: float = 150.0    # 0% position (~10 o'clock)
-    needle_max_angle: float = -30.0    # 100% position (~4 o'clock)
+    # -- Needle angle calibration per dial (atan2 convention: 0=right, CCW+) --
+    rpm_needle_min_angle: float = -155.0    # 0% (idle, ~8 o'clock)
+    rpm_needle_max_angle: float = 60.0      # 100% (redline, ~1 o'clock)
+    fuel_needle_min_angle: float = 165.0    # 0% (E, empty)
+    fuel_needle_max_angle: float = -15.0    # 100% (F, full)
+    boost_needle_min_angle: float = -155.0  # 0% (idle)
+    boost_needle_max_angle: float = 60.0    # 100% (max boost)
 
     # -- Gauge ROIs (horizontal bars, legacy) ---------------------------------
     fuel_gauge_roi: Rect = field(default_factory=lambda: Rect(x=15, y=3, w=70, h=8))

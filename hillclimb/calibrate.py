@@ -166,12 +166,14 @@ class Calibrator:
                 self._capture.reset_window()
             elif key == ord("n"):
                 if self._last_needle_angle is not None:
-                    cfg.needle_min_angle = self._last_needle_angle
-                    print(f"Needle min angle set to {self._last_needle_angle:.1f} deg")
+                    cfg.rpm_needle_min_angle = self._last_needle_angle
+                    cfg.boost_needle_min_angle = self._last_needle_angle
+                    print(f"RPM/Boost needle min angle set to {self._last_needle_angle:.1f} deg")
             elif key == ord("m"):
                 if self._last_needle_angle is not None:
-                    cfg.needle_max_angle = self._last_needle_angle
-                    print(f"Needle max angle set to {self._last_needle_angle:.1f} deg")
+                    cfg.rpm_needle_max_angle = self._last_needle_angle
+                    cfg.boost_needle_max_angle = self._last_needle_angle
+                    print(f"RPM/Boost needle max angle set to {self._last_needle_angle:.1f} deg")
 
         cv2.destroyAllWindows()
 

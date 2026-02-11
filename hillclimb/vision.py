@@ -104,12 +104,15 @@ class VisionAnalyzer:
 
         if state.game_state == GameState.RACING:
             state.rpm = self._read_dial_gauge(
-                frame, cfg.rpm_dial_roi, self._rpm_buf)
+                frame, cfg.rpm_dial_roi, self._rpm_buf,
+                cfg.rpm_needle_min_angle, cfg.rpm_needle_max_angle)
             state.boost = self._read_dial_gauge(
-                frame, cfg.boost_dial_roi, self._boost_buf)
+                frame, cfg.boost_dial_roi, self._boost_buf,
+                cfg.boost_needle_min_angle, cfg.boost_needle_max_angle)
             # Fuel — тоже циферблат в HCR2 (центральный)
             state.fuel = self._read_dial_gauge(
-                frame, cfg.fuel_dial_roi, self._fuel_buf)
+                frame, cfg.fuel_dial_roi, self._fuel_buf,
+                cfg.fuel_needle_min_angle, cfg.fuel_needle_max_angle)
             state.tilt = self._detect_tilt(frame)
             state.terrain_slope = self._detect_terrain_slope(frame)
             state.airborne = self._detect_airborne(frame)
@@ -175,7 +178,7 @@ class VisionAnalyzer:
                           np.array([180, 255, 255], dtype=np.uint8))
         )
         red_upper = np.mean(red_mask > 0)
-        if red_upper > 0.06 and bottom_white > 0.04:
+        if red_upper > 0.08 and bottom_white > 0.04:
             return GameState.TOUCH_TO_CONTINUE
 
         # 2. TOUCH_TO_CONTINUE: dark overlay with text at bottom
@@ -199,7 +202,7 @@ class VisionAnalyzer:
                               np.array(cfg.needle_hsv_lower2, dtype=np.uint8),
                               np.array(cfg.needle_hsv_upper2, dtype=np.uint8))
             )
-            has_needle = np.mean(needle_mask > 0) > 0.005
+            has_needle = np.mean(needle_mask > 0) > 0.025
             if dial_brightness > 30 and has_needle:
                 has_racing_dial = True
                 # Check for "second chance" screen: big white hand cursor
@@ -284,15 +287,17 @@ class VisionAnalyzer:
         frame: np.ndarray,
         dial_roi: CircleROI,
         buf: deque[float],
+        min_angle: float,
+        max_angle: float,
     ) -> float:
-        """Read a circular dial gauge via red needle angle detection.
+        """Read a circular dial gauge via contour-based needle detection.
 
-        1. Crop square around dial center
+        1. Crop square around dial center + circular mask (0.85r)
         2. HSV mask for red needle (two ranges for H wrapping)
         3. Morphological cleanup
-        4. Filter pixels far from center (needle tip, not hub)
-        5. atan2 from center to mean of far red pixels -> angle
-        6. Map angle to 0..1 via calibrated min/max
+        4. findContours → select most elongated contour (aspect ratio)
+        5. Tip angle: farthest point from center → atan2 → degrees
+        6. Map angle → 0..1 via per-dial min_angle/max_angle calibration
         """
         crop = self._crop_circle_roi(frame, dial_roi)
         if crop is None or crop.size == 0:
@@ -301,6 +306,11 @@ class VisionAnalyzer:
         h_crop, w_crop = crop.shape[:2]
         cx_local = w_crop // 2
         cy_local = h_crop // 2
+        radius = min(cx_local, cy_local)
+
+        # Circular mask to exclude UI elements outside the dial face
+        circle_mask = np.zeros((h_crop, w_crop), dtype=np.uint8)
+        cv2.circle(circle_mask, (cx_local, cy_local), int(radius * 0.85), 255, -1)
 
         # HSV mask for red needle (wraps around H=0/180)
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
@@ -308,46 +318,53 @@ class VisionAnalyzer:
         upper1 = np.array(cfg.needle_hsv_upper1, dtype=np.uint8)
         lower2 = np.array(cfg.needle_hsv_lower2, dtype=np.uint8)
         upper2 = np.array(cfg.needle_hsv_upper2, dtype=np.uint8)
-        mask1 = cv2.inRange(hsv, lower1, upper1)
-        mask2 = cv2.inRange(hsv, lower2, upper2)
-        mask = mask1 | mask2
+        mask = cv2.inRange(hsv, lower1, upper1) | cv2.inRange(hsv, lower2, upper2)
+
+        # Apply circular mask
+        mask = cv2.bitwise_and(mask, circle_mask)
 
         # Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        # Find red pixels
-        ys, xs = np.where(mask > 0)
-        if len(xs) < 5:
+        # Find contours and select the most elongated one (needle)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
             return float(np.mean(buf)) if buf else 0.0
 
-        # Filter: keep pixels far from center (needle tip, not hub cap)
-        distances = np.sqrt((xs - cx_local) ** 2 + (ys - cy_local) ** 2)
-        min_dist = dial_roi.radius * 0.3  # ignore center 30%
-        far_mask = distances > min_dist
-        xs_far = xs[far_mask]
-        ys_far = ys[far_mask]
+        best_contour = None
+        best_aspect = 0.0
+        for cnt in contours:
+            if cv2.contourArea(cnt) < 5:
+                continue
+            rect = cv2.minAreaRect(cnt)
+            rw, rh = rect[1]
+            if min(rw, rh) < 1:
+                continue
+            aspect = max(rw, rh) / min(rw, rh)
+            if aspect > best_aspect:
+                best_aspect = aspect
+                best_contour = cnt
 
-        if len(xs_far) < 3:
+        if best_contour is None or best_aspect < 2.0:
             return float(np.mean(buf)) if buf else 0.0
 
-        # Compute angle from center to mean of far needle pixels
-        mean_x = float(np.mean(xs_far)) - cx_local
-        mean_y = float(np.mean(ys_far)) - cy_local
+        # Tip angle: find the point on the contour farthest from dial center
+        pts = best_contour.reshape(-1, 2)
+        dists = np.sqrt((pts[:, 0] - cx_local) ** 2 + (pts[:, 1] - cy_local) ** 2)
+        tip_idx = np.argmax(dists)
+        tip_x = float(pts[tip_idx, 0]) - cx_local
+        tip_y = float(pts[tip_idx, 1]) - cy_local
         # atan2 with screen coords (y-down): negate y for standard math angle
-        angle_rad = math.atan2(-mean_y, mean_x)
-        angle_deg = math.degrees(angle_rad)
+        angle_deg = math.degrees(math.atan2(-tip_y, tip_x))
 
-        # Маппинг угла в 0..1 (стрелка идёт по часовой: min→max)
-        # Используем модулярную арифметику для обхода разрыва atan2 при ±180°
-        min_a = cfg.needle_min_angle   # atan2 угол при 0% (напр. 150° = 10 часов)
-        max_a = cfg.needle_max_angle   # atan2 угол при 100% (напр. -30° = 4 часа)
-        total_sweep = (min_a - max_a) % 360  # полный ход стрелки по часовой
+        # Map angle → 0..1 using per-dial calibration (CW sweep from min to max)
+        total_sweep = (min_angle - max_angle) % 360
         if total_sweep < 1.0:
             fill = 0.5
         else:
-            cw_from_min = (min_a - angle_deg) % 360  # угол по часовой от min
+            cw_from_min = (min_angle - angle_deg) % 360
             fill = cw_from_min / total_sweep
 
         fill = float(np.clip(fill, 0.0, 1.0))
