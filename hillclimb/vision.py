@@ -204,6 +204,16 @@ class VisionAnalyzer:
             has_needle = np.mean(needle_mask > 0) > 0.005
             if dial_brightness > 30 and has_needle:
                 has_racing_dial = True
+                # Check for "second chance" screen: big white hand cursor
+                # in center of screen = car suspended, NOT actually racing
+                hand_zone = hsv[int(h * 0.40):int(h * 0.75),
+                                int(w * 0.35):int(w * 0.65)]
+                white_hand = (
+                    (hand_zone[:, :, 1] < 50) &   # low saturation
+                    (hand_zone[:, :, 2] > 200)     # high brightness
+                )
+                if np.mean(white_hand) > 0.06:
+                    return GameState.DRIVER_DOWN
                 return GameState.RACING
 
         # 4. RESULTS: зелёные кнопки в обоих нижних углах (RETRY + NEXT)

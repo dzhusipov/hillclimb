@@ -119,7 +119,7 @@ def train(
 
     print(f"Training for {total_timesteps} timesteps (n_steps={n_steps})")
     print(f"Config: lr={cfg.learning_rate}, batch={min(cfg.batch_size, n_steps)}")
-    print(f"Actions: MultiDiscrete([2, 5]) — gas/brake × длительность [200,500,1000,2000,3000]мс")
+    print(f"Actions: Discrete(7) — gas[500,1000,2000,3000,5000]мс + brake[300,800]мс (5:2)")
     print("-" * 70)
 
     save_path = model_dir / "ppo_hillclimb"

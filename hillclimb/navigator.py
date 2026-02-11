@@ -121,9 +121,17 @@ class Navigator:
                 time.sleep(2.0)
 
             elif gs == GameState.DRIVER_DOWN:
-                print(f"  [NAV] → tap center (DRIVER_DOWN)")
+                print(f"  [NAV] → DRIVER_DOWN — BACK to skip second chance")
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                time.sleep(1.0)
+                time.sleep(0.3)
+                # BACK скипает экран "second chance" (машина висит в воздухе)
+                # Без этого игра ждёт ~30 сек свайп
+                import subprocess
+                subprocess.run(
+                    [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_BACK"],
+                    capture_output=True, timeout=5,
+                )
+                time.sleep(0.5)
 
             elif gs == GameState.TOUCH_TO_CONTINUE:
                 print(f"  [NAV] → tap center (TOUCH_TO_CONTINUE)")
@@ -143,12 +151,17 @@ class Navigator:
                 time.sleep(2.0)
 
             elif gs == GameState.UNKNOWN:
-                print(f"  [NAV] → UNKNOWN state — saving frame + trying X + center")
+                print(f"  [NAV] → UNKNOWN state — BACK + tap center")
                 self._save_debug_frame(frame, "unknown")
-                self._ctrl.tap(1790, 55)
+                # BACK может скипнуть second chance или другой попап
+                import subprocess
+                subprocess.run(
+                    [cfg.adb_path, "shell", "input", "keyevent", "KEYCODE_BACK"],
+                    capture_output=True, timeout=5,
+                )
                 time.sleep(0.5)
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                time.sleep(1.0)
+                time.sleep(0.5)
 
         return False
 

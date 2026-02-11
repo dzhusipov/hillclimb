@@ -14,11 +14,17 @@ from hillclimb.controller import ADBConnectionError, ADBController, Action
 from hillclimb.navigator import Navigator
 from hillclimb.vision import GameState, VisionAnalyzer, VisionState
 
-# Длительности удержания (мс) — модель выбирает одну из них
-HOLD_DURATIONS = [200, 500, 1000, 2000, 3000]
-
-# Действия: 0=gas, 1=brake (без NOTHING — газ нужен почти всегда)
-ACTION_MAP = [Action.GAS, Action.BRAKE]
+# Discrete(7): 5 газов + 2 тормоза → рандомная политика 71% газ
+# Газ — длинные нажатия для прироста, тормоз — короткие тапы для баланса
+ACTIONS = [
+    (Action.GAS, 500),     # 0: gas 500ms
+    (Action.GAS, 1000),    # 1: gas 1s
+    (Action.GAS, 2000),    # 2: gas 2s
+    (Action.GAS, 3000),    # 3: gas 3s
+    (Action.GAS, 5000),    # 4: gas 5s
+    (Action.BRAKE, 300),   # 5: brake 300ms (баланс)
+    (Action.BRAKE, 800),   # 6: brake 800ms (сильная коррекция)
+]
 
 
 class HillClimbEnv(gym.Env):
@@ -28,10 +34,10 @@ class HillClimbEnv(gym.Env):
         [fuel, rpm, boost, tilt_norm, terrain_slope_norm,
          airborne, speed_estimate, distance_norm]
 
-    Action: MultiDiscrete([2, 5])
-        dim 0: тип действия — 0=gas, 1=brake
-        dim 1: длительность удержания — индекс в HOLD_DURATIONS
-               [200ms, 500ms, 1000ms, 2000ms, 3000ms]
+    Action: Discrete(7)
+        0-4: gas с разной длительностью [500,1000,2000,3000,5000]мс
+        5-6: brake для баланса [300,800]мс
+        Соотношение 5:2 газ:тормоз
 
     Reward:
         +0.1 * distance_delta_m  (actual metres gained)
@@ -48,8 +54,7 @@ class HillClimbEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(8,), dtype=np.float32,
         )
-        # MultiDiscrete: [тип_действия (2: gas/brake), длительность (5)]
-        self.action_space = spaces.MultiDiscrete([2, len(HOLD_DURATIONS)])
+        self.action_space = spaces.Discrete(len(ACTIONS))
         self.render_mode = render_mode
 
         self._capture = ScreenCapture()
@@ -105,14 +110,25 @@ class HillClimbEnv(gym.Env):
         return state.to_array(), {}
 
     def step(
-        self, action: np.ndarray,
+        self, action: int | np.ndarray,
     ) -> tuple[np.ndarray, float, bool, bool, dict]:
         self._step_count += 1
 
-        # Декодируем MultiDiscrete: [тип (0=gas,1=brake), длительность]
-        action_type = int(action[0])
-        hold_ms = HOLD_DURATIONS[int(action[1])]
-        actual_action = ACTION_MAP[action_type]
+        # Декодируем Discrete(7): индекс в ACTIONS
+        action_idx = int(action)
+        actual_action, hold_ms = ACTIONS[action_idx]
+
+        # === Rule-based балансировка: override при опасном крене ===
+        # Крен назад (задирается перед) → тормоз (опускает перед)
+        # Крен вперёд (клюёт нос) → газ (опускает зад)
+        if self._prev_state is not None and self._prev_state.game_state == GameState.RACING:
+            rel_tilt = self._prev_state.tilt - self._prev_state.terrain_slope
+            if rel_tilt > 30:   # сильный крен назад
+                actual_action = Action.BRAKE
+                hold_ms = 300
+            elif rel_tilt < -30:  # сильный крен вперёд
+                actual_action = Action.GAS
+                hold_ms = 300
 
         # Удерживаем газ/тормоз на выбранную длительность
         try:

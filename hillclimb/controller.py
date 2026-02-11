@@ -63,16 +63,19 @@ class ADBController:
 
     def _hold(self, x: int, y: int, duration_ms: int) -> None:
         """Simulate long press via `input swipe` with same start/end coords."""
+        # timeout должен быть больше duration свайпа
+        extra_timeout = max(duration_ms / 1000 + 3, 5)
         self._adb(
             "input", "swipe",
             str(x), str(y), str(x), str(y), str(duration_ms),
+            _timeout=extra_timeout,
         )
 
-    def _adb(self, *args: str) -> str:
+    def _adb(self, *args: str, _timeout: float = 5) -> str:
         cmd = [cfg.adb_path] + self._device_args + ["shell"] + list(args)
         for attempt in range(3):
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=5,
+                cmd, capture_output=True, text=True, timeout=_timeout,
             )
             if result.returncode == 0:
                 return result.stdout.strip()
