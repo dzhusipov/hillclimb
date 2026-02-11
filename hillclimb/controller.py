@@ -1,16 +1,16 @@
-"""ADB input controller: send gas / brake / tap commands to Android."""
+"""ADB input controller: send gas / brake / tap commands to Android.
+
+Each ADBController instance maintains a persistent connection to a specific
+device via adbutils.
+"""
 
 from __future__ import annotations
 
-import subprocess
+import logging
 import time
 from enum import IntEnum
 
-from hillclimb.config import cfg
-
-
-class ADBConnectionError(RuntimeError):
-    """ADB lost connection or INJECT_EVENTS permission."""
+logger = logging.getLogger(__name__)
 
 
 class Action(IntEnum):
@@ -20,99 +20,110 @@ class Action(IntEnum):
 
 
 class ADBController:
-    """Send touch events to Android via ADB."""
+    """Send touch events to a specific Android device via ADB."""
 
-    def __init__(self) -> None:
-        self._device_args: list[str] = (
-            ["-s", cfg.adb_device] if cfg.adb_device else []
-        )
-        self._verify_connection()
+    def __init__(
+        self,
+        adb_serial: str = "localhost:5555",
+        gas_x: int = 700,
+        gas_y: int = 400,
+        brake_x: int = 100,
+        brake_y: int = 400,
+        action_hold_ms: int = 100,
+    ) -> None:
+        """
+        Args:
+            adb_serial: ADB device serial.
+            gas_x, gas_y: Gas button coordinates (landscape).
+            brake_x, brake_y: Brake button coordinates (landscape).
+            action_hold_ms: Default hold duration for actions.
+        """
+        self._serial = adb_serial
+        self._gas_x = gas_x
+        self._gas_y = gas_y
+        self._brake_x = brake_x
+        self._brake_y = brake_y
+        self._action_hold_ms = action_hold_ms
+        self._device = None
+        self._connect()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def _connect(self) -> None:
+        """Establish persistent ADB connection."""
+        import adbutils
+        client = adbutils.AdbClient()
+        try:
+            client.connect(self._serial, timeout=5)
+        except Exception:
+            pass
+        self._device = client.device(self._serial)
+        # Verify connection
+        try:
+            self._device.shell("echo ok")
+        except Exception as e:
+            raise RuntimeError(f"Cannot connect to {self._serial}: {e}")
+        logger.info("Controller connected: %s", self._serial)
 
     def execute(self, action: Action | int, duration_ms: int | None = None) -> None:
-        """Execute an action on the device.
+        """Execute an action.
 
         Args:
-            action: Action enum or int (0=nothing, 1=gas, 2=brake).
-            duration_ms: Hold duration in ms. Defaults to cfg.action_hold_ms.
+            action: 0=nothing, 1=gas, 2=brake.
+            duration_ms: Hold duration in ms. Defaults to action_hold_ms.
         """
         action = Action(action)
-        duration_ms = duration_ms or cfg.action_hold_ms
+        duration_ms = duration_ms or self._action_hold_ms
 
         if action == Action.NOTHING:
             return
         elif action == Action.GAS:
-            self._hold(cfg.gas_button.x, cfg.gas_button.y, duration_ms)
+            self._hold(self._gas_x, self._gas_y, duration_ms)
         elif action == Action.BRAKE:
-            self._hold(cfg.brake_button.x, cfg.brake_button.y, duration_ms)
+            self._hold(self._brake_x, self._brake_y, duration_ms)
 
     def tap(self, x: int, y: int) -> None:
-        """Single tap at (x, y) via short swipe (обход проблемы input tap в HCR2)."""
+        """Single tap at (x, y)."""
         self._hold(x, y, 50)
 
     def hold(self, x: int, y: int, duration_ms: int) -> None:
         """Long press at (x, y) for duration_ms."""
         self._hold(x, y, duration_ms)
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
     def _hold(self, x: int, y: int, duration_ms: int) -> None:
-        """Simulate long press via `input swipe` with same start/end coords."""
-        # timeout должен быть больше duration свайпа
-        extra_timeout = max(duration_ms / 1000 + 3, 5)
-        self._adb(
-            "input", "swipe",
-            str(x), str(y), str(x), str(y), str(duration_ms),
-            _timeout=extra_timeout,
-        )
-
-    def _adb(self, *args: str, _timeout: float = 5) -> str:
-        cmd = [cfg.adb_path] + self._device_args + ["shell"] + list(args)
+        """Simulate press via `input swipe` with same start/end."""
+        cmd = f"input swipe {x} {y} {x} {y} {duration_ms}"
         for attempt in range(3):
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=_timeout,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip()
-            err = result.stderr.strip()
-            if "INJECT_EVENTS" in err or "SecurityException" in err:
-                if attempt < 2:
-                    time.sleep(2.0)
-                    continue
-                raise ADBConnectionError(
-                    f"ADB lost INJECT_EVENTS permission (scrcpy disconnected?): {err}"
+            try:
+                self._device.shell(cmd)
+                return
+            except Exception as e:
+                logger.warning(
+                    "ADB command failed (attempt %d/3, %s): %s",
+                    attempt + 1, self._serial, e,
                 )
-            raise RuntimeError(f"ADB command failed: {err}")
-        return ""  # unreachable
+                if attempt < 2:
+                    time.sleep(1.0)
+                    self._connect()
+        raise RuntimeError(f"ADB input failed after 3 attempts on {self._serial}")
 
-    def _verify_connection(self) -> None:
-        """Check that ADB can reach the device."""
-        try:
-            out = self._adb("echo", "ok")
-            if "ok" not in out:
-                raise RuntimeError("Unexpected ADB response")
-        except FileNotFoundError:
-            raise RuntimeError(
-                "adb not found. Install via: brew install android-platform-tools"
-            )
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("ADB command timed out — is the device connected?")
+    @property
+    def serial(self) -> str:
+        return self._serial
+
+    def close(self) -> None:
+        """Release resources."""
+        self._device = None
 
 
 def main() -> None:
-    """Test: gas 2s → brake 1s → gas 3s."""
+    """Test: gas 2s -> brake 1s -> gas 3s."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Test ADB controller")
-    parser.add_argument("--test", action="store_true", help="Run gas/brake test sequence")
+    parser.add_argument("--serial", default="localhost:5555", help="ADB serial")
+    parser.add_argument("--test", action="store_true", help="Run gas/brake test")
     args = parser.parse_args()
 
-    ctrl = ADBController()
+    ctrl = ADBController(adb_serial=args.serial)
 
     if args.test:
         print("Gas 2s ...")
@@ -127,7 +138,7 @@ def main() -> None:
         ctrl.execute(Action.GAS, duration_ms=3000)
         print("Done.")
     else:
-        print("Use --test to run gas/brake sequence")
+        print(f"Connected to {args.serial}. Use --test to run gas/brake sequence.")
 
 
 if __name__ == "__main__":

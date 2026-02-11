@@ -1,13 +1,12 @@
 """Configuration: button coordinates, ROI regions, thresholds.
 
-All coordinates are in the scrcpy window pixel space.
+Default coordinates are for ReDroid 800x480 landscape.
 Run `python -m hillclimb.calibrate` to recalibrate for your device.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -42,43 +41,39 @@ class CircleROI:
 
 
 # ---------------------------------------------------------------------------
-# Default configuration (Redmi Note 8 Pro 2340x1080 landscape via scrcpy)
-# Adjust via calibrate.py or by editing config.json
+# Default configuration for ReDroid 800x480 landscape
 # ---------------------------------------------------------------------------
 
 @dataclass
 class Config:
-    # -- scrcpy window capture ------------------------------------------------
-    scrcpy_window_title: str = "scrcpy"
-
     # -- ADB ------------------------------------------------------------------
-    adb_path: str = str(Path.home() / "Library/Android/sdk/platform-tools/adb")
-    adb_device: str = ""  # empty = first connected device
+    adb_serial: str = "localhost:5555"
 
-    # -- Capture method: "adb" (native res, ~200ms) or "mss" (scrcpy window, ~5ms)
-    capture_method: str = "adb"
+    # -- Capture --------------------------------------------------------------
+    capture_backend: str = "png"  # "png" or "raw"
 
-    # -- Gas / Brake (in Android screen coords, landscape) --------------------
-    gas_button: Point = field(default_factory=lambda: Point(x=2200, y=900))
-    brake_button: Point = field(default_factory=lambda: Point(x=200, y=900))
+    # -- Emulators (for parallel training) ------------------------------------
+    num_emulators: int = 2
+    adb_port_base: int = 5555
 
-    # -- Navigation buttons (2340x1080 landscape) ----------------------------
-    race_button: Point = field(default_factory=lambda: Point(x=1170, y=900))
-    start_button: Point = field(default_factory=lambda: Point(x=2088, y=976))
-    back_button: Point = field(default_factory=lambda: Point(x=200, y=950))
-    skip_button: Point = field(default_factory=lambda: Point(x=870, y=875))
-    close_popup_button: Point = field(default_factory=lambda: Point(x=1170, y=600))
-    retry_button: Point = field(default_factory=lambda: Point(x=180, y=1000))
-    next_button: Point = field(default_factory=lambda: Point(x=2150, y=1000))
-    center_screen: Point = field(default_factory=lambda: Point(x=1170, y=540))
+    # -- Gas / Brake (800x480 landscape) --------------------------------------
+    gas_button: Point = field(default_factory=lambda: Point(x=700, y=400))
+    brake_button: Point = field(default_factory=lambda: Point(x=100, y=400))
 
-    # -- Legacy aliases (kept for controller.py compatibility) -----------------
-    play_button: Point = field(default_factory=lambda: Point(x=1170, y=900))
+    # -- Navigation buttons (800x480 landscape, approximate) ------------------
+    race_button: Point = field(default_factory=lambda: Point(x=400, y=400))
+    start_button: Point = field(default_factory=lambda: Point(x=700, y=430))
+    back_button: Point = field(default_factory=lambda: Point(x=60, y=430))
+    skip_button: Point = field(default_factory=lambda: Point(x=300, y=380))
+    close_popup_button: Point = field(default_factory=lambda: Point(x=400, y=240))
+    retry_button: Point = field(default_factory=lambda: Point(x=60, y=440))
+    next_button: Point = field(default_factory=lambda: Point(x=740, y=440))
+    center_screen: Point = field(default_factory=lambda: Point(x=400, y=240))
 
-    # -- Dial gauge ROIs (circular, калиброваны для Redmi Note 8 Pro 2340x1080)
-    rpm_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=920, cy=955, radius=70))
-    fuel_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1170, cy=975, radius=70))
-    boost_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=1420, cy=955, radius=70))
+    # -- Dial gauge ROIs (approximate for 800x480, needs calibration) ---------
+    rpm_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=315, cy=420, radius=30))
+    fuel_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=400, cy=430, radius=30))
+    boost_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=485, cy=420, radius=30))
 
     # -- Needle colour (red, wraps around H=0/180 in OpenCV HSV) --------------
     needle_hsv_lower1: list[int] = field(default_factory=lambda: [0, 100, 100])
@@ -86,27 +81,28 @@ class Config:
     needle_hsv_lower2: list[int] = field(default_factory=lambda: [170, 100, 100])
     needle_hsv_upper2: list[int] = field(default_factory=lambda: [180, 255, 255])
 
-    # -- Needle angle calibration (degrees, atan2 convention: 0=right, CCW+) --
-    # Стрелки идут по часовой от ~10 часов (150°) до ~4 часов (-30°)
-    needle_min_angle: float = 150.0    # позиция стрелки при 0% (10 часов)
-    needle_max_angle: float = -30.0    # позиция стрелки при 100% (4 часа)
+    # -- Needle angle calibration (atan2 convention: 0=right, CCW+) -----------
+    needle_min_angle: float = 150.0    # 0% position (~10 o'clock)
+    needle_max_angle: float = -30.0    # 100% position (~4 o'clock)
 
-    # -- Gauge ROIs (horizontal bars — kept for fuel, legacy) -----------------
-    fuel_gauge_roi: Rect = field(default_factory=lambda: Rect(x=50, y=10, w=200, h=20))
-    rpm_gauge_roi: Rect = field(default_factory=lambda: Rect(x=300, y=10, w=150, h=20))
-    boost_gauge_roi: Rect = field(default_factory=lambda: Rect(x=500, y=10, w=150, h=20))
+    # -- Gauge ROIs (horizontal bars, legacy) ---------------------------------
+    fuel_gauge_roi: Rect = field(default_factory=lambda: Rect(x=15, y=3, w=70, h=8))
 
-    # -- OCR ROIs (calibrated for Redmi Note 8 Pro results screen) -----------
-    distance_text_roi: Rect = field(default_factory=lambda: Rect(x=1130, y=840, w=160, h=45))
-    coins_text_roi: Rect = field(default_factory=lambda: Rect(x=780, y=710, w=140, h=80))
-    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=780, y=710, w=140, h=80))
-    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=1200, y=710, w=320, h=80))
+    # -- OCR ROIs (800x480 landscape, approximate) ----------------------------
+    distance_text_roi: Rect = field(default_factory=lambda: Rect(x=380, y=355, w=60, h=20))
 
-    # -- Vehicle ROI (where the car typically sits) ---------------------------
-    vehicle_roi: Rect = field(default_factory=lambda: Rect(x=200, y=300, w=400, h=200))
+    # -- Results screen OCR ROIs ----------------------------------------------
+    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=260, y=300, w=60, h=30))
+    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=410, y=300, w=120, h=30))
 
-    # -- Terrain ROI (ground line area) ---------------------------------------
-    terrain_roi: Rect = field(default_factory=lambda: Rect(x=0, y=400, w=800, h=200))
+    # Kept for backward compat
+    coins_text_roi: Rect = field(default_factory=lambda: Rect(x=260, y=300, w=60, h=30))
+
+    # -- Vehicle ROI (where the car sits, for tilt detection) -----------------
+    vehicle_roi: Rect = field(default_factory=lambda: Rect(x=70, y=130, w=140, h=80))
+
+    # -- Terrain ROI (ground area) --------------------------------------------
+    terrain_roi: Rect = field(default_factory=lambda: Rect(x=0, y=170, w=280, h=80))
 
     # -- HSV ranges for gauge bar colour detection ----------------------------
     fuel_hsv_lower: list[int] = field(default_factory=lambda: [30, 80, 80])
@@ -118,6 +114,11 @@ class Config:
     tilt_smoothing_window: int = 5
     gauge_smoothing_window: int = 5
 
+    # -- OCR ------------------------------------------------------------------
+    ocr_backend: str = "template"  # "template" (default) or "tesseract"
+    ocr_confidence_threshold: float = 0.85
+    tesseract_cmd: str = "tesseract"
+
     # -- Game loop timing ----------------------------------------------------
     loop_interval_sec: float = 0.1  # target 10 decisions/sec
     action_hold_ms: int = 100       # ADB swipe hold duration
@@ -128,17 +129,13 @@ class Config:
 
     # -- RL training ----------------------------------------------------------
     model_dir: str = "models"
-    learning_rate: float = 3e-4
-    batch_size: int = 64
-    n_steps: int = 64
-    total_timesteps: int = 200_000
+    learning_rate: float = 2.5e-4
+    batch_size: int = 256
+    n_steps: int = 128
+    total_timesteps: int = 10_000_000
 
     # -- Template paths -------------------------------------------------------
     template_dir: str = str(Path(__file__).resolve().parent.parent / "templates")
-
-    # -- OCR ------------------------------------------------------------------
-    tesseract_cmd: str = "/opt/homebrew/bin/tesseract"
-    ocr_backend: str = "tesseract"  # or "easyocr"
 
     # ------------------------------------------------------------------
     # Persistence
@@ -170,6 +167,10 @@ class Config:
             else:
                 setattr(cfg, key, value)
         return cfg
+
+    def emulator_serial(self, index: int) -> str:
+        """Return ADB serial for emulator at given index."""
+        return f"localhost:{self.adb_port_base + index}"
 
 
 # Singleton — import and use everywhere

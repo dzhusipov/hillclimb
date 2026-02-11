@@ -90,10 +90,8 @@ class VisionAnalyzer:
 
         # Optional templates (loaded lazily)
         self._templates: dict[str, np.ndarray | None] = {}
+        self._digit_templates: dict[int, np.ndarray] | None = None
         self._prev_frame_gray: np.ndarray | None = None
-
-        # OCR engine (lazy init)
-        self._ocr_ready = False
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -396,52 +394,142 @@ class VisionAnalyzer:
         return float(np.mean(buf))
 
     # ------------------------------------------------------------------
-    # OCR: Distance text ("103m")
+    # OCR: Distance text ("103m") via template matching
     # ------------------------------------------------------------------
 
+    def _load_digit_templates(self) -> None:
+        """Load digit templates 0-9 from templates/digits/ directory."""
+        if self._digit_templates is not None:
+            return
+        self._digit_templates = {}
+        digits_dir = Path(cfg.template_dir) / "digits"
+        if not digits_dir.exists():
+            return
+        for digit in range(10):
+            path = digits_dir / f"{digit}.png"
+            if path.exists():
+                tmpl = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+                if tmpl is not None:
+                    self._digit_templates[digit] = tmpl
+
     def _read_distance_ocr(self, frame: np.ndarray) -> float:
-        """Read distance text above gauges via OCR. Returns metres as float."""
+        """Read distance text via template matching digits."""
         crop = self._crop_roi(frame, cfg.distance_text_roi)
         if crop is None or crop.size == 0:
             return 0.0
+        return self._ocr_number_from_crop(crop)
 
-        return self._ocr_distance_from_crop(crop)
+    def _ocr_number_from_crop(self, crop: np.ndarray) -> float:
+        """Extract a number from a cropped region using template matching.
 
-    def _ocr_distance_from_crop(self, crop: np.ndarray) -> float:
-        """Извлечь дистанцию из кропа текста (мульти-порог).
-
-        Игровой шрифт HCR2 — жирный курсив с неоднородной яркостью.
-        Запускаем OCR при 4 порогах, берём результат с максимумом цифр.
+        Tries multiple thresholds and returns the result with most digits found.
+        Falls back to Tesseract if digit templates are not available.
         """
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        self._load_digit_templates()
 
-        best_dist = 0.0
+        # Fall back to Tesseract if no templates
+        if not self._digit_templates:
+            return self._ocr_number_tesseract(crop)
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+        best_value = 0.0
         best_ndigits = 0
+        best_confidence = 0.0
+
         for thresh_val in (150, 160, 170, 185):
             _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
-            cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-            inv = cv2.bitwise_not(cleaned)
-            padded = cv2.copyMakeBorder(inv, 20, 20, 20, 20,
-                                         cv2.BORDER_CONSTANT, value=255)
-            scaled = cv2.resize(padded, None, fx=2, fy=2,
-                                interpolation=cv2.INTER_LINEAR)
-            text = self._run_ocr(scaled)
-            dist = self._parse_distance(text)
-            ndigits = len(re.findall(r"\d", text))
-            if ndigits > best_ndigits:
+            value, ndigits, confidence = self._match_digits(thresh)
+            if ndigits > best_ndigits or (
+                ndigits == best_ndigits and confidence > best_confidence
+            ):
+                best_value = value
                 best_ndigits = ndigits
-                best_dist = dist
-        return best_dist
+                best_confidence = confidence
+
+        return best_value
+
+    def _match_digits(
+        self, binary_image: np.ndarray,
+    ) -> tuple[float, int, float]:
+        """Match digit templates against a binary image.
+
+        Returns (value, num_digits, avg_confidence).
+        """
+        threshold = cfg.ocr_confidence_threshold
+        matches: list[tuple[int, int, float]] = []  # (x, digit, confidence)
+
+        for digit, tmpl in self._digit_templates.items():
+            # Resize template if needed to match image height
+            th, tw = tmpl.shape[:2]
+            ih = binary_image.shape[0]
+            if th != ih and ih > 0:
+                scale = ih / th
+                tmpl_resized = cv2.resize(
+                    tmpl, (max(1, int(tw * scale)), ih),
+                    interpolation=cv2.INTER_LINEAR,
+                )
+            else:
+                tmpl_resized = tmpl
+
+            if (tmpl_resized.shape[0] > binary_image.shape[0] or
+                    tmpl_resized.shape[1] > binary_image.shape[1]):
+                continue
+
+            result = cv2.matchTemplate(
+                binary_image, tmpl_resized, cv2.TM_CCOEFF_NORMED,
+            )
+            locations = np.where(result >= threshold)
+            for y, x in zip(*locations):
+                conf = float(result[y, x])
+                matches.append((int(x), digit, conf))
+
+        if not matches:
+            return 0.0, 0, 0.0
+
+        # Non-maximum suppression: keep best match per x-region
+        matches.sort(key=lambda m: m[0])
+        filtered: list[tuple[int, int, float]] = []
+        for x, digit, conf in matches:
+            if filtered and abs(x - filtered[-1][0]) < 5:
+                # Same region — keep higher confidence
+                if conf > filtered[-1][2]:
+                    filtered[-1] = (x, digit, conf)
+            else:
+                filtered.append((x, digit, conf))
+
+        # Build number from left-to-right digits
+        value = 0
+        for _, digit, _ in filtered:
+            value = value * 10 + digit
+
+        avg_conf = sum(c for _, _, c in filtered) / len(filtered)
+        return float(value), len(filtered), avg_conf
 
     @staticmethod
-    def _parse_distance(text: str) -> float:
-        """Parse OCR text like '103m' or '1,234m' into float metres."""
-        text = text.strip().replace(",", "").replace(" ", "")
-        match = re.search(r"(\d+)", text)
-        if match:
-            return float(match.group(1))
-        return 0.0
+    def _ocr_number_tesseract(crop: np.ndarray) -> float:
+        """Fallback: Tesseract OCR if available."""
+        try:
+            import pytesseract
+            pytesseract.pytesseract.tesseract_cmd = cfg.tesseract_cmd
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 160, 255, cv2.THRESH_BINARY)
+            inv = cv2.bitwise_not(thresh)
+            padded = cv2.copyMakeBorder(
+                inv, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255,
+            )
+            scaled = cv2.resize(
+                padded, None, fx=2, fy=2, interpolation=cv2.INTER_LINEAR,
+            )
+            text = pytesseract.image_to_string(
+                scaled,
+                config="--psm 7 -c tessedit_char_whitelist=0123456789m,.",
+            ).strip()
+            text = text.replace(",", "").replace(" ", "")
+            match = re.search(r"(\d+)", text)
+            return float(match.group(1)) if match else 0.0
+        except Exception:
+            return 0.0
 
     # ------------------------------------------------------------------
     # OCR: Results screen
@@ -458,51 +546,15 @@ class VisionAnalyzer:
         coins = 0
         distance_m = 0.0
 
-        # Results coins (dark text on light bg -> BINARY_INV + padding)
         crop_coins = self._crop_roi(frame, cfg.results_coins_roi)
         if crop_coins is not None and crop_coins.size > 0:
-            gray = cv2.cvtColor(crop_coins, cv2.COLOR_BGR2GRAY)
-            _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY_INV)
-            padded = cv2.copyMakeBorder(thresh, 20, 20, 20, 20,
-                                        cv2.BORDER_CONSTANT, value=0)
-            scaled = cv2.resize(padded, None, fx=2, fy=2,
-                                interpolation=cv2.INTER_LINEAR)
-            text = self._run_ocr(scaled)
-            text_clean = text.strip().replace(",", "").replace(" ", "")
-            digits = re.search(r"(\d+)", text_clean)
-            if digits:
-                coins = int(digits.group(1))
+            coins = int(self._ocr_number_from_crop(crop_coins))
 
-        # Results distance (white text with dark outline on grey bg)
         crop_dist = self._crop_roi(frame, cfg.results_distance_roi)
         if crop_dist is not None and crop_dist.size > 0:
-            distance_m = self._ocr_distance_from_crop(crop_dist)
+            distance_m = self._ocr_number_from_crop(crop_dist)
 
         return coins, distance_m
-
-    # ------------------------------------------------------------------
-    # OCR engine
-    # ------------------------------------------------------------------
-
-    def _run_ocr(self, image: np.ndarray) -> str:
-        """Run OCR on a preprocessed grayscale/binary image."""
-        if cfg.ocr_backend == "tesseract":
-            return self._run_tesseract(image)
-        return ""
-
-    @staticmethod
-    def _run_tesseract(image: np.ndarray) -> str:
-        """Run Tesseract OCR. Returns raw text string."""
-        try:
-            import pytesseract
-            pytesseract.pytesseract.tesseract_cmd = cfg.tesseract_cmd
-            text = pytesseract.image_to_string(
-                image,
-                config="--psm 7 -c tessedit_char_whitelist=0123456789m,.",
-            )
-            return text.strip()
-        except Exception:
-            return ""
 
     # ------------------------------------------------------------------
     # Vehicle Tilt Detection (unchanged from original)
