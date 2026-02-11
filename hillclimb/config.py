@@ -56,24 +56,25 @@ class Config:
     num_emulators: int = 2
     adb_port_base: int = 5555
 
-    # -- Gas / Brake (800x480 landscape) --------------------------------------
-    gas_button: Point = field(default_factory=lambda: Point(x=700, y=400))
-    brake_button: Point = field(default_factory=lambda: Point(x=100, y=400))
+    # -- Gas / Brake (800x480 landscape, calibrated) --------------------------
+    gas_button: Point = field(default_factory=lambda: Point(x=750, y=430))
+    brake_button: Point = field(default_factory=lambda: Point(x=55, y=420))
 
-    # -- Navigation buttons (800x480 landscape, approximate) ------------------
-    race_button: Point = field(default_factory=lambda: Point(x=400, y=400))
-    start_button: Point = field(default_factory=lambda: Point(x=700, y=430))
-    back_button: Point = field(default_factory=lambda: Point(x=60, y=430))
-    skip_button: Point = field(default_factory=lambda: Point(x=300, y=380))
+    # -- Navigation buttons (800x480 landscape, calibrated) ------------------
+    race_button: Point = field(default_factory=lambda: Point(x=650, y=295))
+    start_button: Point = field(default_factory=lambda: Point(x=730, y=445))
+    back_button: Point = field(default_factory=lambda: Point(x=65, y=445))
+    skip_button: Point = field(default_factory=lambda: Point(x=400, y=300))
     close_popup_button: Point = field(default_factory=lambda: Point(x=400, y=240))
-    retry_button: Point = field(default_factory=lambda: Point(x=60, y=440))
-    next_button: Point = field(default_factory=lambda: Point(x=740, y=440))
+    retry_button: Point = field(default_factory=lambda: Point(x=50, y=448))
+    next_button: Point = field(default_factory=lambda: Point(x=750, y=448))
     center_screen: Point = field(default_factory=lambda: Point(x=400, y=240))
+    adventure_tab: Point = field(default_factory=lambda: Point(x=155, y=25))
 
-    # -- Dial gauge ROIs (approximate for 800x480, needs calibration) ---------
-    rpm_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=315, cy=420, radius=30))
-    fuel_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=400, cy=430, radius=30))
-    boost_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=485, cy=420, radius=30))
+    # -- Dial gauge ROIs (800x480 landscape, calibrated) --------------------
+    rpm_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=290, cy=395, radius=55))
+    fuel_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=400, cy=440, radius=40))
+    boost_dial_roi: CircleROI = field(default_factory=lambda: CircleROI(cx=510, cy=395, radius=55))
 
     # -- Needle colour (red, wraps around H=0/180 in OpenCV HSV) --------------
     needle_hsv_lower1: list[int] = field(default_factory=lambda: [0, 100, 100])
@@ -88,21 +89,22 @@ class Config:
     # -- Gauge ROIs (horizontal bars, legacy) ---------------------------------
     fuel_gauge_roi: Rect = field(default_factory=lambda: Rect(x=15, y=3, w=70, h=8))
 
-    # -- OCR ROIs (800x480 landscape, approximate) ----------------------------
-    distance_text_roi: Rect = field(default_factory=lambda: Rect(x=380, y=355, w=60, h=20))
+    # -- OCR ROIs (800x480 landscape, calibrated) -----------------------------
+    # Yellow distance text below RPM dial
+    distance_text_roi: Rect = field(default_factory=lambda: Rect(x=245, y=425, w=110, h=25))
 
-    # -- Results screen OCR ROIs ----------------------------------------------
-    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=260, y=300, w=60, h=30))
-    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=410, y=300, w=120, h=30))
+    # -- Results screen OCR ROIs (calibrated) ---------------------------------
+    results_coins_roi: Rect = field(default_factory=lambda: Rect(x=290, y=285, w=70, h=30))
+    results_distance_roi: Rect = field(default_factory=lambda: Rect(x=430, y=285, w=100, h=30))
 
     # Kept for backward compat
-    coins_text_roi: Rect = field(default_factory=lambda: Rect(x=260, y=300, w=60, h=30))
+    coins_text_roi: Rect = field(default_factory=lambda: Rect(x=290, y=285, w=70, h=30))
 
     # -- Vehicle ROI (where the car sits, for tilt detection) -----------------
-    vehicle_roi: Rect = field(default_factory=lambda: Rect(x=70, y=130, w=140, h=80))
+    vehicle_roi: Rect = field(default_factory=lambda: Rect(x=150, y=100, w=200, h=150))
 
-    # -- Terrain ROI (ground area) --------------------------------------------
-    terrain_roi: Rect = field(default_factory=lambda: Rect(x=0, y=170, w=280, h=80))
+    # -- Terrain ROI (ground area below car) ----------------------------------
+    terrain_roi: Rect = field(default_factory=lambda: Rect(x=100, y=250, w=300, h=100))
 
     # -- HSV ranges for gauge bar colour detection ----------------------------
     fuel_hsv_lower: list[int] = field(default_factory=lambda: [30, 80, 80])
@@ -116,7 +118,7 @@ class Config:
 
     # -- OCR ------------------------------------------------------------------
     ocr_backend: str = "template"  # "template" (default) or "tesseract"
-    ocr_confidence_threshold: float = 0.85
+    ocr_confidence_threshold: float = 0.75
     tesseract_cmd: str = "tesseract"
 
     # -- Game loop timing ----------------------------------------------------

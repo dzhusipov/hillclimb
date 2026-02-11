@@ -422,7 +422,8 @@ class VisionAnalyzer:
     def _ocr_number_from_crop(self, crop: np.ndarray) -> float:
         """Extract a number from a cropped region using template matching.
 
-        Tries multiple thresholds and returns the result with most digits found.
+        Primary: HSV yellow filter (for HCR2 yellow distance text).
+        Fallback: grayscale thresholding at multiple levels.
         Falls back to Tesseract if digit templates are not available.
         """
         self._load_digit_templates()
@@ -431,21 +432,33 @@ class VisionAnalyzer:
         if not self._digit_templates:
             return self._ocr_number_tesseract(crop)
 
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-
         best_value = 0.0
         best_ndigits = 0
         best_confidence = 0.0
 
-        for thresh_val in (150, 160, 170, 185):
-            _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
-            value, ndigits, confidence = self._match_digits(thresh)
-            if ndigits > best_ndigits or (
-                ndigits == best_ndigits and confidence > best_confidence
-            ):
-                best_value = value
-                best_ndigits = ndigits
-                best_confidence = confidence
+        # Method 1: HSV yellow filter (best for in-race distance text)
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        yellow_mask = cv2.inRange(hsv, (18, 150, 180), (35, 255, 255))
+        value, ndigits, confidence = self._match_digits(yellow_mask)
+        if ndigits > best_ndigits or (
+            ndigits == best_ndigits and confidence > best_confidence
+        ):
+            best_value = value
+            best_ndigits = ndigits
+            best_confidence = confidence
+
+        # Method 2: grayscale thresholding (fallback for other text)
+        if best_ndigits == 0:
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            for thresh_val in (150, 170, 190):
+                _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY)
+                value, ndigits, confidence = self._match_digits(thresh)
+                if ndigits > best_ndigits or (
+                    ndigits == best_ndigits and confidence > best_confidence
+                ):
+                    best_value = value
+                    best_ndigits = ndigits
+                    best_confidence = confidence
 
         return best_value
 
@@ -460,24 +473,13 @@ class VisionAnalyzer:
         matches: list[tuple[int, int, float]] = []  # (x, digit, confidence)
 
         for digit, tmpl in self._digit_templates.items():
-            # Resize template if needed to match image height
-            th, tw = tmpl.shape[:2]
-            ih = binary_image.shape[0]
-            if th != ih and ih > 0:
-                scale = ih / th
-                tmpl_resized = cv2.resize(
-                    tmpl, (max(1, int(tw * scale)), ih),
-                    interpolation=cv2.INTER_LINEAR,
-                )
-            else:
-                tmpl_resized = tmpl
-
-            if (tmpl_resized.shape[0] > binary_image.shape[0] or
-                    tmpl_resized.shape[1] > binary_image.shape[1]):
+            # Use template at native size (extracted from same resolution)
+            if (tmpl.shape[0] > binary_image.shape[0] or
+                    tmpl.shape[1] > binary_image.shape[1]):
                 continue
 
             result = cv2.matchTemplate(
-                binary_image, tmpl_resized, cv2.TM_CCOEFF_NORMED,
+                binary_image, tmpl, cv2.TM_CCOEFF_NORMED,
             )
             locations = np.where(result >= threshold)
             for y, x in zip(*locations):

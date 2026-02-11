@@ -5,7 +5,8 @@ __pycache__/
 config.json
 models/
 logs/
-templates/
+templates/*.png
+!templates/digits/
 docker/apk/*.apk
 docker/apk/*.xapk
 docker/apk/*.apkm
