@@ -1,200 +1,231 @@
-# Hill Climb Racing AI Agent
+# Hill Climb Racing 2 AI Agent
 
-AI-агент, который играет в [Hill Climb Racing](https://play.google.com/store/apps/details?id=com.fingersoft.hillclimb) на Android-устройстве. Читает экран телефона через scrcpy, анализирует состояние игры с помощью OpenCV и управляет машиной через ADB — от простых правил до обучаемого RL-агента (PPO).
+AI-агент, который играет в [Hill Climb Racing 2](https://play.google.com/store/apps/details?id=com.fingersoft.hcr2) на параллельных Android-эмуляторах (ReDroid в Docker). Читает экран через ADB screencap, анализирует состояние игры с помощью OpenCV, принимает решения (rule-based или PPO RL), управляет машиной через ADB.
 
 ## Как это работает
 
 ```
-Android (Hill Climb Racing)
-    │
-    ▼  scrcpy (USB, ~35ms)
-    │
-Screen Capture (mss / ADB fallback)
-    │
-    ▼
-CV Module (OpenCV)
-    ├── Game State Classifier   (menu / racing / crash / results)
-    ├── Gauge Reader            (fuel, RPM, boost → 0–100%)
-    ├── Vehicle Tilt Detector   (угол наклона машины)
-    ├── Terrain Analyzer        (наклон поверхности)
-    └── Speed Estimator         (optical flow)
-    │
-    ▼  State Vector [fuel, rpm, boost, tilt, slope, airborne, speed]
-    │
-Agent (rule-based или PPO)
-    │
-    ▼  Action: nothing / gas / brake
-    │
-ADB Controller (input swipe)
-    │
-    ▼  Touch events → Android
+┌── Docker (NAS) ───────────────────────────┐
+│  ReDroid #0 (HCR2) ← ADB localhost:5555  │
+│  ReDroid #1 (HCR2) ← ADB localhost:5556  │
+│  ...до 8 эмуляторов                       │
+│  ws-scrcpy (:8100) — live просмотр        │
+│  dashboard (:8150) — мониторинг           │
+└───────────────────────────────────────────┘
+         │ ADB screencap (PNG, ~250ms)
+         ▼
+┌── Conda: hillclimb ──────────────────────┐
+│  capture.py    — ADB screencap (adbutils)│
+│  vision.py     — CV: states, dials, OCR  │
+│  controller.py — ADB input: gas/brake    │
+│  navigator.py  — state machine навигация │
+│  env.py        — Gymnasium HCR2Env       │
+│  train.py      — PPO (RTX 3090, CUDA)   │
+└──────────────────────────────────────────┘
 ```
 
-Цикл работает на ~10 решений/сек (~100ms на итерацию).
+Цикл работает на ~2.5 FPS через ADB screencap. С параллельными эмуляторами целевой throughput — 60+ steps/sec суммарно.
 
 ## Требования
 
-- **macOS** (Apple Silicon) или Linux
+- **Ubuntu LTS** (NAS), или macOS для разработки
 - **Python 3.11** (через conda)
-- **Android-устройство** с Hill Climb Racing, подключённое по USB
-- **USB Debugging** включён на устройстве
-
-### Системные зависимости
-
-```bash
-brew install scrcpy android-platform-tools
-```
+- **Docker** с ReDroid (требуются kernel-модули binder_linux и ashmem_linux)
+- **NVIDIA GPU** + CUDA 12.4 (для обучения; эмуляторы используют software rendering)
 
 ## Установка
 
-```bash
-# Клонировать репозиторий
-git clone <repo-url> && cd hillclimb
+### 1. Conda-окружение
 
-# Создать conda-окружение
+```bash
+git clone <repo-url> && cd hillclimb
 conda env create -f environment.yml
 conda activate hillclimb
 ```
 
-## Быстрый старт
-
-### 1. Подключить телефон и запустить scrcpy
+### 2. Docker-инфраструктура
 
 ```bash
-# Убедиться что устройство видно
-adb devices
+cd docker/
 
-# Запустить зеркалирование экрана
-scrcpy
+# 2 эмулятора (default)
+docker compose up -d
+
+# 4 эмулятора
+docker compose --profile scale-4 up -d
+
+# 8 эмуляторов
+docker compose --profile scale-8 up -d
 ```
 
-### 2. Откалибровать области экрана
+### 3. Установить HCR2 на эмуляторы
+
+```bash
+# Положить APK в docker/apk/, затем:
+./scripts/manage.sh install-apk
+```
+
+### 4. Заблокировать интернет для эмуляторов
+
+**Обязательно!** HCR2 использует серверную валидацию — при переносе сейва с физического устройства без блокировки интернета сработает CHEAT DETECTED.
+
+```bash
+SUBNET=$(docker network inspect docker_hcr2-net -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}')
+sudo iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+sudo iptables -I DOCKER-USER 2 -s $SUBNET -d $SUBNET -j RETURN
+sudo iptables -I DOCKER-USER 3 -s $SUBNET -j DROP
+```
+
+Правила действуют только на подсеть hcr2-net. Другие контейнеры не затрагиваются.
+Правила не переживают ребут — добавить в автозагрузку при необходимости.
+
+### 5. Перенести прогресс HCR2 (опционально)
+
+Adventure mode требует ~3500 звёзд. Чтобы не грайндить:
+
+```bash
+# На Mac (где подключён телефон с прогрессом):
+adb backup -f hcr2_save.ab -noapk com.fingersoft.hcr2
+scp hcr2_save.ab dasm@NAS-IP:~/develop/hillclimb/
+
+# На NAS — извлечь и пушнуть:
+python3 -c "
+import zlib
+with open('hcr2_save.ab','rb') as f:
+    [f.readline() for _ in range(4)]
+    open('hcr2_save.tar','wb').write(zlib.decompress(f.read()))
+"
+mkdir -p /tmp/hcr2_restore && tar xf hcr2_save.tar -C /tmp/hcr2_restore
+
+# Для каждого эмулятора:
+adb -s localhost:5555 root
+adb -s localhost:5555 push /tmp/hcr2_restore/apps/com.fingersoft.hcr2/f/gamestatus.bin /data/data/com.fingersoft.hcr2/files/
+adb -s localhost:5555 push /tmp/hcr2_restore/apps/com.fingersoft.hcr2/f/gamestatus.bak /data/data/com.fingersoft.hcr2/files/
+```
+
+## Быстрый старт
+
+### Запустить HCR2
+
+```bash
+adb -s localhost:5555 shell am start -n com.fingersoft.hcr2/.AppActivity
+```
+
+### Тест захвата экрана
+
+```bash
+python -m hillclimb.capture --serial localhost:5555 --benchmark 10
+```
+
+### Тест контроллера
+
+```bash
+python -m hillclimb.controller --serial localhost:5555 --test
+```
+
+### Калибровка (ROI, кнопки, диалы)
 
 ```bash
 python -m hillclimb.calibrate
 ```
 
-Интерактивная утилита: переключай режимы через `TAB`, выделяй области мышкой, нажми `s` для сохранения.
-
-| Клавиша | Действие |
-|---------|----------|
-| `TAB` | Переключить режим (fuel ROI, vehicle ROI, кнопки...) |
-| `s` | Сохранить конфигурацию в `config.json` |
-| `d` | Показать/скрыть debug overlay |
-| `q` | Выйти |
-
-### 3. Протестировать управление
-
-```bash
-python -m hillclimb.controller --test
-```
-
-Машина выполнит: газ 2 сек → тормоз 1 сек → газ 3 сек.
-
-### 4. Запустить rule-based агента
+### Rule-based агент
 
 ```bash
 python -m hillclimb.game_loop --agent rules
+python -m hillclimb.game_loop --agent rules --episodes 5 --headless
 ```
 
-Агент будет играть бесконечно (Ctrl+C для остановки). Для ограничения по эпизодам:
+### Обучение RL-агента (PPO)
 
 ```bash
-python -m hillclimb.game_loop --agent rules --episodes 5
-```
-
-### 5. Обучить RL-агента (PPO)
-
-```bash
-# Обучение (~1000 эпизодов)
-python -m hillclimb.train --episodes 1000
-
-# Или по количеству шагов
-python -m hillclimb.train --timesteps 200000
-
-# С визуализацией
-python -m hillclimb.train --render
-
-# Продолжить обучение с чекпоинта
+python -m hillclimb.train --timesteps 10000000 --num-envs 8
 python -m hillclimb.train --resume models/ppo_hillclimb.zip
 ```
 
-Прогресс обучения можно отслеживать через TensorBoard:
+### Оценка обученной модели
 
 ```bash
-tensorboard --logdir logs/tensorboard
-```
-
-### 6. Оценить и запустить обученную модель
-
-```bash
-# Оценка (10 эпизодов, статистика)
 python -m hillclimb.evaluate --episodes 10
-
-# Запустить RL-агента в игре
-python -m hillclimb.game_loop --agent rl
 ```
+
+## Мониторинг
+
+| URL | Описание |
+|-----|----------|
+| `http://NAS-IP:8100` | ws-scrcpy — live просмотр эмуляторов |
+| `http://NAS-IP:8150` | Веб-дашборд — статусы, MJPEG, управление |
+
+Оба сервиса видны в CasaOS.
 
 ## Структура проекта
 
 ```
 hillclimb/
+├── docker/
+│   ├── docker-compose.yml    — ReDroid + ws-scrcpy + dashboard
+│   ├── Dockerfile.dashboard  — образ веб-дашборда
+│   ├── .env                  — конфигурация эмуляторов
+│   └── apk/                  — APK файлы HCR2 (gitignored)
+├── web/
+│   ├── server.py             — FastAPI дашборд (:8150)
+│   ├── emulator.py           — управление эмуляторами (Docker + ADB)
+│   ├── streamer.py           — MJPEG стриминг
+│   ├── templates/dashboard.html
+│   └── static/{app.js, style.css}
 ├── hillclimb/
-│   ├── config.py          # Координаты кнопок, ROI, пороги
-│   ├── capture.py         # Захват экрана (scrcpy/mss + ADB fallback)
-│   ├── vision.py          # CV: state classifier, gauge reader, tilt, terrain
-│   ├── controller.py      # ADB input: gas/brake/tap
-│   ├── navigator.py       # Навигация по меню, авто-рестарт
-│   ├── calibrate.py       # Интерактивная калибровка ROI
-│   ├── agent_rules.py     # Rule-based baseline агент
-│   ├── agent_rl.py        # RL агент (обёртка над PPO)
-│   ├── env.py             # Gymnasium environment
-│   ├── game_loop.py       # Основной цикл: capture → CV → agent → input
-│   ├── logger.py          # CSV логирование + PNG кадры
-│   ├── train.py           # Обучение PPO
-│   └── evaluate.py        # Оценка модели
+│   ├── config.py             — координаты кнопок, ROI, пороги (800x480)
+│   ├── capture.py            — ADB screencap через adbutils
+│   ├── vision.py             — CV: 9 game states, dials, template OCR
+│   ├── controller.py         — ADB input: gas/brake/tap через adbutils
+│   ├── navigator.py          — state machine навигация (9 состояний)
+│   ├── agent_rules.py        — rule-based baseline агент
+│   ├── agent_rl.py           — RL агент (PPO)
+│   ├── env.py                — Gymnasium HCR2Env
+│   ├── game_loop.py          — основной цикл: capture → CV → agent → input
+│   ├── logger.py             — CSV лог + PNG кадры
+│   ├── calibrate.py          — интерактивная калибровка ROI
+│   └── train.py              — обучение PPO
+├── scripts/
+│   └── manage.sh             — start/stop/restart/install-apk
 ├── tests/
-│   └── test_vision.py     # Тесты CV модуля
-├── models/                # Сохранённые RL модели
-├── logs/                  # Логи обучения и игровых сессий
-├── templates/             # Шаблоны для template matching
-├── environment.yml        # Conda environment
-└── config.json            # Конфигурация (создаётся калибровкой)
+│   └── test_vision.py        — тесты CV модуля
+├── models/                   — RL модели (gitignored)
+├── logs/                     — логи (gitignored)
+├── templates/                — шаблоны для template matching OCR
+├── environment.yml           — conda (Python 3.11, PyTorch CUDA 12.4)
+├── requirements.txt          — pip dependencies
+├── PLAN.md                   — план рефакторинга с прогрессом
+├── CLAUDE.md                 — инструкции для Claude Code
+└── config.json               — пользовательский конфиг (gitignored)
 ```
 
-## Конфигурация
+## Game States (9 states)
 
-Координаты кнопок и ROI-областей настраиваются тремя способами:
+```
+UNKNOWN → MAIN_MENU → VEHICLE_SELECT → RACING →
+DRIVER_DOWN → TOUCH_TO_CONTINUE → RESULTS → (retry) → VEHICLE_SELECT
+                                           ↗
+DOUBLE_COINS_POPUP → (skip) → RACING
+CAPTCHA → (handle) → continue
+```
 
-1. **Интерактивно:** `python -m hillclimb.calibrate` — drag-and-drop регионов на экране
-2. **Вручную:** редактирование `config.json`
-3. **По умолчанию:** значения в `hillclimb/config.py` (Galaxy S-series, landscape)
+## Actions
 
-## RL Agent: детали
+Discrete(3): `0=nothing, 1=gas, 2=brake`
 
-**State vector** — 7 значений float32 [0..1]:
+В воздухе: gas = наклон назад (нос вверх), brake = наклон вперёд (нос вниз).
 
-| Индекс | Параметр | Описание |
-|--------|----------|----------|
-| 0 | fuel | Уровень топлива |
-| 1 | rpm | Обороты двигателя |
-| 2 | boost | Уровень буста |
-| 3 | tilt | Наклон машины (нормализованный) |
-| 4 | terrain_slope | Наклон поверхности (нормализованный) |
-| 5 | airborne | В воздухе (0 или 1) |
-| 6 | speed_estimate | Оценка скорости (optical flow) |
+## Технологии
 
-**Actions** — Discrete(3): `nothing`, `gas`, `brake`
-
-**Reward:**
-
-| Компонент | Вес | Описание |
-|-----------|-----|----------|
-| speed_estimate | +1.0 | Ехать вперёд |
-| crashed | -10.0 | Штраф за переворот |
-| fuel_consumed | -0.1 | Экономия топлива |
-| moving with fuel | +0.5 | Бонус за движение |
-| extreme tilt (>45 deg) | -0.3 | Штраф за нестабильность |
+- **Эмуляторы:** ReDroid 14 (Docker), 480x800 portrait / 800x480 landscape
+- **Computer Vision:** OpenCV (HSV-сегментация, dial gauge reader, template matching OCR)
+- **Reinforcement Learning:** Stable-Baselines3 PPO, Gymnasium
+- **Screen Capture:** ADB screencap через adbutils (~2.5 FPS)
+- **Input:** ADB shell input swipe через adbutils
+- **Hardware Acceleration:** PyTorch CUDA (RTX 3090)
+- **Web Dashboard:** FastAPI + MJPEG + WebSocket
+- **Monitoring:** ws-scrcpy, CasaOS
 
 ## Тесты
 
@@ -202,11 +233,3 @@ hillclimb/
 conda activate hillclimb
 python -m pytest tests/ -v
 ```
-
-## Технологии
-
-- **Computer Vision:** OpenCV (HSV-сегментация, Canny edges, HoughLines, optical flow)
-- **Reinforcement Learning:** Stable-Baselines3 PPO, Gymnasium
-- **Screen Capture:** mss (fast) + ADB screencap (fallback)
-- **Input:** ADB shell input swipe
-- **Hardware Acceleration:** PyTorch MPS (Apple Silicon), CUDA (Nvidia)

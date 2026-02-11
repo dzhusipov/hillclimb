@@ -11,8 +11,11 @@
 
 ## Прогресс выполнения
 
-### Шаг 1: environment.yml + requirements.txt — НЕ НАЧАТ
-Нужно обновить зависимости под NAS (CUDA 12.x, adbutils и т.д.)
+### Шаг 1: environment.yml + requirements.txt — ВЫПОЛНЕН ✅
+- [x] `environment.yml` обновлён: PyTorch CUDA 12.4, adbutils, fastapi, uvicorn, pydantic, jinja2
+- [x] `requirements.txt` обновлён (pip-зависимости)
+- [x] Убраны Mac-специфичные пакеты (mss, pytesseract)
+- [x] Проверено: PyTorch 2.5.1, CUDA=True, все пакеты установлены
 
 ### Шаг 2: Docker инфраструктура + мониторинг (Фаза 0) — ВЫПОЛНЕН ~90%
 - [x] `docker/docker-compose.yml` — 8 ReDroid-контейнеров с profiles (default=2, scale-4, scale-8)
@@ -23,11 +26,24 @@
 - [x] Веб-дашборд на порту 8150: MJPEG стримы, статусы, управление контейнерами, start/stop game
 - [x] CasaOS labels на dashboard и ws-scrcpy
 - [x] `scripts/manage.sh` — start/stop/restart/status/install-apk
-- [ ] **БАГ:** Touch input через дашборд — координаты не попадают в правильное место (маппинг norm→screen)
-- [ ] Установить и проверить HCR2 на эмуляторе через ws-scrcpy
+- [x] HCR2 установлена и запускается на обоих эмуляторах
+- [x] Прогресс из Redmi перенесён на эмуляторы (46338 coins, 110 gems, Adventure)
+- [x] Интернет для эмуляторов заблокирован через iptables DOCKER-USER
+- [ ] **БАГ:** Touch input через дашборд — координаты не попадают (маппинг norm→screen)
 
-### Шаг 3–10: НЕ НАЧАТЫ
-Следующий шаг: **Шаг 3 — Capture + Vision + Controller (Фаза 1)**
+### Шаг 3: Capture + Vision + Controller (Фаза 1) — ВЫПОЛНЕН ✅
+- [x] `capture.py` переписан: adbutils, PNG/RAW backends, auto-reconnect, ~2.4 FPS
+- [x] `controller.py` переписан: adbutils, параметризованные координаты, без singleton config
+- [x] `config.py` обновлён: дефолты для ReDroid 800x480, adb_serial, emulator_serial()
+- [x] `vision.py` обновлён: template matching OCR вместо Tesseract (с fallback)
+- [x] Smoke-тест: capture (480x800 BGR) + vision (VEHICLE_SELECT detected) + controller OK
+
+### Шаг 4: Калибровка — НЕ НАЧАТ
+Нужно определить точные ROI и координаты кнопок для 800x480 ReDroid.
+Нужно создать шаблоны цифр для template matching OCR.
+
+### Шаг 5–10: НЕ НАЧАТЫ
+Следующий шаг: **Шаг 4 — Калибровка ROI и кнопок**
 
 ---
 

@@ -8,4 +8,9 @@ logs/
 templates/
 docker/apk/*.apk
 docker/apk/*.xapk
+docker/apk/*.apkm
 docker/.env
+*.ab
+*.tar
+capture_test.png
+demos/

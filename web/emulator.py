@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 MAX_EMULATORS = 8
 HCR2_PACKAGE = "com.fingersoft.hcr2"
-HCR2_ACTIVITY = "com.fingersoft.hcr2/com.fingersoft.game.MainActivity"
+HCR2_ACTIVITY = "com.fingersoft.hcr2/.AppActivity"
 
 
 @dataclass

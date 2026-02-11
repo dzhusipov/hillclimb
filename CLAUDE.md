@@ -1,26 +1,39 @@
 # Hill Climb Racing 2 AI Agent
 
 ## Что это
-AI-агент, который играет в Hill Climb Racing 2 на Android (Redmi Note 8 Pro, 2340x1080). Читает экран телефона через scrcpy, анализирует состояние игры через OpenCV + Tesseract OCR, принимает решения (rule-based или PPO RL), и отправляет команды управления через ADB.
+AI-агент, который играет в Hill Climb Racing 2 на параллельных Android-эмуляторах (ReDroid в Docker). Читает экран через ADB screencap, анализирует состояние через OpenCV, принимает решения (rule-based или PPO RL), и отправляет команды через ADB.
+
+## Платформы
+- **Обучение (NAS):** Ubuntu LTS, Ryzen 5 5600, 80GB DDR4, RTX 3090 24GB VRAM
+- **Разработка:** macOS, Apple Silicon M2 Max, 32GB
+- **Эмуляторы:** ReDroid 14 в Docker, 800x480 landscape, software rendering
 
 ## Архитектура
 ```
-Android (HCR2) → scrcpy (USB) → Mac Screen Capture (mss)
-→ CV Module (OpenCV + Tesseract OCR):
-  - State classifier (8 game states)
-  - Circular dial gauge reader (RPM, Boost via red needle detection)
-  - Horizontal bar gauge reader (Fuel)
-  - Distance OCR ("103m" text)
-  - Tilt, terrain, airborne, speed detection
-→ Agent (rules / PPO RL): решение {nothing, gas, brake}
-→ ADB Controller → touch events → Android
+┌── Docker ──────────────────────────────────────┐
+│  ReDroid #0 (HCR2) ← ADB localhost:5555       │
+│  ReDroid #1 (HCR2) ← ADB localhost:5556       │
+│  ...до 8 эмуляторов                            │
+│  ws-scrcpy (:8100) — live просмотр             │
+│  hcr2-dashboard (:8150) — мониторинг + контроль│
+└────────────────────────────────────────────────┘
+         │ screencap (PNG, ~250ms)
+         ▼
+┌── Conda: hillclimb ───────────────────────────┐
+│  capture.py    — ADB screencap через adbutils  │
+│  vision.py     — CV: 9 states, dials, OCR      │
+│  controller.py — ADB input: gas/brake/tap      │
+│  navigator.py  — state machine навигация       │
+│  env.py        — Gymnasium HCR2Env             │
+│  train.py      — PPO (RTX 3090, CUDA)         │
+└────────────────────────────────────────────────┘
 ```
 
 ## Conda-окружение
 ```bash
 conda activate hillclimb
 ```
-Создано из `environment.yml`. Python 3.11, PyTorch (MPS на Mac), OpenCV, stable-baselines3, pytesseract.
+Python 3.11, PyTorch 2.5 (CUDA 12.4), OpenCV, stable-baselines3, adbutils, FastAPI.
 
 ## Запуск тестов
 ```bash
@@ -28,67 +41,133 @@ conda activate hillclimb
 python -m pytest tests/ -v
 ```
 
+## Docker-инфраструктура
+
+### Эмуляторы
+```bash
+cd docker/
+docker compose up -d                    # 2 эмулятора (default)
+docker compose --profile scale-4 up -d  # 4 эмулятора
+docker compose --profile scale-8 up -d  # 8 эмуляторов
+```
+
+### Порты
+| Сервис | Порт | Описание |
+|--------|------|----------|
+| hcr2-0..7 | 5555-5562 | ADB |
+| ws-scrcpy | 8100 | Браузерный просмотр эмуляторов |
+| hcr2-dashboard | 8150 | Веб-дашборд мониторинга |
+
+### Блокировка интернета (обязательно!)
+HCR2 использует серверную валидацию. Эмуляторы ДОЛЖНЫ работать офлайн,
+иначе сработает CHEAT DETECTED при переносе сейва.
+```bash
+SUBNET=$(docker network inspect docker_hcr2-net -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}')
+sudo iptables -I DOCKER-USER 1 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+sudo iptables -I DOCKER-USER 2 -s $SUBNET -d $SUBNET -j RETURN
+sudo iptables -I DOCKER-USER 3 -s $SUBNET -j DROP
+```
+Правила в DOCKER-USER действуют только на подсеть docker_hcr2-net.
+Другие контейнеры (Jellyfin, Frigate и т.д.) не затрагиваются.
+Правила не переживают ребут — добавить в автозагрузку при необходимости.
+
+### Перенос прогресса HCR2 с физического устройства
+```bash
+# На Mac (где подключён телефон):
+adb backup -f hcr2_save.ab -noapk com.fingersoft.hcr2
+scp hcr2_save.ab dasm@NAS-IP:~/develop/hillclimb/
+
+# На NAS — извлечь и запушить на эмуляторы:
+python3 -c "
+import zlib
+with open('hcr2_save.ab','rb') as f:
+    [f.readline() for _ in range(4)]
+    open('hcr2_save.tar','wb').write(zlib.decompress(f.read()))
+"
+mkdir -p /tmp/hcr2_restore && tar xf hcr2_save.tar -C /tmp/hcr2_restore
+
+# Для каждого эмулятора (adb root уже включён в ReDroid):
+adb -s localhost:5555 root
+adb -s localhost:5555 push gamestatus.bin /data/data/com.fingersoft.hcr2/files/
+adb -s localhost:5555 push gamestatus.bak /data/data/com.fingersoft.hcr2/files/
+# Исправить права:
+APP_UID=$(adb -s localhost:5555 shell "stat -c '%u' /data/data/com.fingersoft.hcr2/")
+adb -s localhost:5555 shell "chown $APP_UID:$APP_UID /data/data/com.fingersoft.hcr2/files/gamestatus.*"
+```
+
+### Запуск HCR2 на эмуляторе
+```bash
+adb -s localhost:5555 shell am start -n com.fingersoft.hcr2/.AppActivity
+adb -s localhost:5555 shell am force-stop com.fingersoft.hcr2
+```
+**Важно:** Activity класс = `.AppActivity` (НЕ `.game.MainActivity`).
+
 ## Основные команды
 ```bash
-# Калибровка CV (интерактивная настройка ROI, кнопок, диалов)
-python -m hillclimb.calibrate
+# Тест захвата экрана
+python -m hillclimb.capture --serial localhost:5555 --benchmark 10
 
-# Тест контроллера (gas 2s → brake 1s → gas 3s)
-python -m hillclimb.controller --test
+# Тест контроллера
+python -m hillclimb.controller --serial localhost:5555 --test
 
-# Rule-based агент (основной игровой цикл)
+# Rule-based агент
 python -m hillclimb.game_loop --agent rules
 python -m hillclimb.game_loop --agent rules --episodes 5 --headless
 
 # Обучение RL агента
-python -m hillclimb.train --episodes 1000
-python -m hillclimb.train --timesteps 200000 --render
-python -m hillclimb.train --resume models/ppo_hillclimb.zip
+python -m hillclimb.train --timesteps 10000000 --num-envs 8
 
-# Оценка обученной модели
-python -m hillclimb.evaluate --episodes 10
-
-# Запуск RL агента в игре
+# Запуск RL агента
 python -m hillclimb.game_loop --agent rl
 ```
 
 ## Структура проекта
 ```
 hillclimb/
+├── docker/
+│   ├── docker-compose.yml    — ReDroid + ws-scrcpy + dashboard
+│   ├── Dockerfile.dashboard  — образ для веб-дашборда
+│   ├── .env                  — конфигурация эмуляторов
+│   └── apk/                  — APK файлы HCR2 (gitignored)
+├── web/
+│   ├── server.py             — FastAPI дашборд (:8150)
+│   ├── emulator.py           — управление эмуляторами (Docker + ADB)
+│   ├── streamer.py           — MJPEG стриминг
+│   ├── templates/dashboard.html
+│   └── static/{app.js, style.css}
 ├── hillclimb/
-│   ├── config.py        — координаты кнопок, ROI (Rect+CircleROI), OCR, пороги
-│   ├── capture.py       — захват экрана (scrcpy/mss + ADB fallback)
-│   ├── vision.py        — CV: 8 states, dial reader, OCR, tilt, terrain
-│   ├── controller.py    — ADB input: gas/brake/tap
-│   ├── navigator.py     — state machine навигация (8 состояний)
-│   ├── agent_rules.py   — rule-based baseline агент
-│   ├── agent_rl.py      — RL агент (обёртка над PPO)
-│   ├── env.py           — Gymnasium environment для RL (8-dim obs)
-│   ├── game_loop.py     — основной цикл capture→CV→agent→input
-│   ├── logger.py        — CSV лог (distance_m, coins) + PNG кадры
-│   ├── calibrate.py     — калибровка: ROI, кнопки, dial, needle angles
-│   └── train.py         — скрипт обучения PPO
+│   ├── config.py             — координаты кнопок, ROI, пороги (800x480)
+│   ├── capture.py            — ADB screencap через adbutils
+│   ├── vision.py             — CV: 9 states, dials, template OCR
+│   ├── controller.py         — ADB input: gas/brake/tap через adbutils
+│   ├── navigator.py          — state machine навигация (9 состояний)
+│   ├── agent_rules.py        — rule-based baseline агент
+│   ├── agent_rl.py           — RL агент (обёртка над PPO)
+│   ├── env.py                — Gymnasium environment
+│   ├── game_loop.py          — основной цикл capture→CV→agent→input
+│   ├── logger.py             — CSV лог + PNG кадры
+│   ├── calibrate.py          — калибровка ROI
+│   └── train.py              — обучение PPO
+├── scripts/
+│   └── manage.sh             — start/stop/restart/install-apk
 ├── tests/
-│   └── test_vision.py   — 34 теста: dials, OCR, classifier, navigator
-├── models/              — сохранённые RL модели
-├── logs/                — логи обучения + игровые логи
-├── templates/           — шаблоны для template matching
-└── environment.yml      — conda environment
+│   └── test_vision.py        — тесты CV модуля
+├── models/                   — RL модели
+├── logs/                     — логи
+├── templates/                — шаблоны для template matching OCR
+├── environment.yml           — conda (PyTorch CUDA 12.4)
+├── requirements.txt          — pip dependencies
+├── PLAN.md                   — план рефакторинга с прогрессом
+└── config.json               — пользовательский конфиг (gitignored)
 ```
 
-## Prerequisites
-1. scrcpy: `brew install scrcpy`
-2. ADB: `brew install android-platform-tools`
-3. Tesseract: `brew install tesseract` (at `/opt/homebrew/bin/tesseract`)
-4. Android подключён по USB, USB Debugging включён
-5. `scrcpy` запущен — экран телефона виден на Mac
-
-## Game States (8 states)
+## Game States (9 states)
 ```
 UNKNOWN → MAIN_MENU → VEHICLE_SELECT → RACING →
 DRIVER_DOWN → TOUCH_TO_CONTINUE → RESULTS → (retry) → VEHICLE_SELECT
                                            ↗
 DOUBLE_COINS_POPUP → (skip) → RACING
+CAPTCHA → (handle) → continue
 ```
 
 ## Navigator State Machine
@@ -104,35 +183,23 @@ DOUBLE_COINS_POPUP → (skip) → RACING
 
 Stuck detection: same state 3 cycles → fallback tap center.
 
-## Конфигурация
-Координаты кнопок и ROI регионов настраиваются через:
-1. `python -m hillclimb.calibrate` — интерактивно (TAB по режимам)
-2. Редактирование `config.json` — вручную
-3. Дефолты в `hillclimb/config.py` — для Redmi Note 8 Pro 2340x1080 landscape
-
-### Калибровка диалов
-В calibrate.py, режим RPM_DIAL / BOOST_DIAL:
-1. Кликнуть центр диала
-2. Кликнуть край → задаётся CircleROI
-3. Нажать 't' — включить тест overlay (видна маска иглы + угол)
-4. Нажать 'n' при игле на 0% → записать min angle
-5. Нажать 'm' при игле на 100% → записать max angle
-6. Нажать 's' — сохранить
-
-## State Vector (вход RL агента)
-8 значений float32 [0..1]:
-```
-[fuel, rpm, boost, tilt_norm, terrain_slope_norm, airborne, speed_estimate, distance_norm]
-```
-
 ## Actions
 Discrete(3): `0=nothing, 1=gas, 2=brake`
 
-## Reward Function
-```
-+0.1 * distance_delta_m    — метры вперёд (OCR), fallback speed_estimate
--10.0 * crashed            — штраф за DRIVER_DOWN
--0.1 * fuel_consumed       — экономия топлива
-+0.5 * (fuel>0 and moving) — бонус за движение
--0.3 * (|tilt|>45°)        — штраф за экстремальный наклон
-```
+## Ключевые технические заметки
+
+### ReDroid
+- Образ: `redroid/redroid:14.0.0-latest`, 480x800 portrait (landscape в игре = 800x480)
+- GPU: software rendering (guest mode), RTX 3090 только для PyTorch
+- ADB root по дефолту
+- iptables внутри контейнера НЕ работает (нет kernel модуля)
+- Airplane mode НЕ блокирует Docker сеть
+
+### HCR2
+- Package: `com.fingersoft.hcr2`, Activity: `.AppActivity`
+- Сейв: `/data/data/com.fingersoft.hcr2/files/gamestatus.{bin,bak,dat}`
+- Формат сейва: зашифрованный бинарный, Cocos2d-x, не документирован
+- `allowBackup=true` в манифесте — adb backup работает
+- CHEAT DETECTED при переносе сейва + доступ к интернету
+- Офлайн режим (интернет заблокирован) — сейв принимается без проблем
+- Adventure mode требует ~3500 звёзд — нужен перенос прогресса или грайнд
