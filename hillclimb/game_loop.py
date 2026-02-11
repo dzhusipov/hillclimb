@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import signal
+import subprocess
 import sys
 import time
 
@@ -43,6 +44,9 @@ class GameLoop:
         self._headless = headless
         self._running = False
         self._logger: Logger | None = None
+        # Container name: localhost:5555 → hcr2-0, localhost:5556 → hcr2-1, etc.
+        port = int(adb_serial.split(":")[-1])
+        self._container_name = f"hcr2-{port - 5555}"
 
     def run(self, max_episodes: int = 0, max_steps: int = 0) -> None:
         """Run the game loop.
@@ -64,12 +68,18 @@ class GameLoop:
                     break
 
                 print(f"\n=== Episode {episode} [{self._serial}] ===")
-                if not self._navigator.ensure_racing():
-                    print("Failed to start race, retrying...")
-                    time.sleep(2.0)
+                try:
+                    if not self._navigator.ensure_racing():
+                        print("Failed to start race, retrying...")
+                        time.sleep(2.0)
+                        continue
+
+                    steps = self._run_episode(logger, episode)
+                except RuntimeError as e:
+                    print(f"  [ERROR] {e}")
+                    self._restart_container()
                     continue
 
-                steps = self._run_episode(logger, episode)
                 total_steps += steps
 
                 # Log episode summary with results data
@@ -136,6 +146,10 @@ class GameLoop:
             logger.log(state, action, frame)
             step += 1
 
+            # Periodic status
+            if step % 50 == 0:
+                print(f"  step={step} fuel={state.fuel:.0%} dist={state.distance_m:.0f}m action={Action(action).name}")
+
             # Debug display
             if not self._headless:
                 import cv2
@@ -155,6 +169,33 @@ class GameLoop:
                 time.sleep(sleep_time)
 
         return step
+
+    def _restart_container(self) -> None:
+        """Restart the Docker container for this emulator and reconnect."""
+        print(f"  [WATCHDOG] Restarting container {self._container_name}...")
+        subprocess.run(
+            ["docker", "restart", self._container_name],
+            timeout=60, capture_output=True,
+        )
+        print(f"  [WATCHDOG] Container restarted, waiting for boot...")
+        time.sleep(15)
+        # Reconnect ADB and all components
+        self._capture = ScreenCapture(adb_serial=self._serial)
+        self._controller = ADBController(
+            adb_serial=self._serial,
+            gas_x=cfg.gas_button.x,
+            gas_y=cfg.gas_button.y,
+            brake_x=cfg.brake_button.x,
+            brake_y=cfg.brake_button.y,
+            action_hold_ms=cfg.action_hold_ms,
+        )
+        self._navigator = Navigator(
+            self._controller, self._capture, self._vision,
+        )
+        # Relaunch HCR2
+        self._controller.shell("am start -n com.fingersoft.hcr2/.AppActivity")
+        time.sleep(8)
+        print(f"  [WATCHDOG] Recovery complete")
 
     def stop(self) -> None:
         self._running = False

@@ -74,7 +74,7 @@ class ScreenCapture:
 
     def _capture_png(self) -> np.ndarray:
         """Capture via screencap -p (PNG). Smaller over network."""
-        data = self._device.shell("screencap -p", encoding=None)
+        data = self._device.shell("screencap -p", encoding=None, timeout=10)
         arr = np.frombuffer(data, dtype=np.uint8)
         frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if frame is None:
@@ -83,7 +83,7 @@ class ScreenCapture:
 
     def _capture_raw(self) -> np.ndarray:
         """Capture via screencap (RAW RGBA). No compression overhead."""
-        data = self._device.shell("screencap", encoding=None)
+        data = self._device.shell("screencap", encoding=None, timeout=10)
         # Header: 16 bytes on Android 14+ (w, h, format, colorSpace)
         if len(data) < 16:
             raise RuntimeError(f"Screencap too short: {len(data)} bytes")
