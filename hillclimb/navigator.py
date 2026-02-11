@@ -57,6 +57,7 @@ class Navigator:
 
     def ensure_racing(self, timeout: float = 20.0) -> bool:
         """Navigate from any state to RACING. Returns True if successful."""
+        self._last_results = None  # reset — will be set fresh if RESULTS seen
         deadline = time.time() + timeout
         self._same_state_count = 0
         self._prev_state = None

@@ -303,11 +303,15 @@ class VisionAnalyzer:
 
         # 4. RESULTS: зелёные кнопки внизу (RETRY слева, NEXT справа)
         #    Иногда NEXT не видна (анимация) — достаточно RETRY + серая панель
+        #    Exclude splash screen: too vivid/colorful center
+        center_quarter = hsv[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
+        vivid_center = np.mean(
+            (center_quarter[:, :, 1] > 80) & (center_quarter[:, :, 2] > 80))
         bottom_left = hsv[int(h * 0.85):, : w // 3]
         bottom_right = hsv[int(h * 0.85):, 2 * w // 3 :]
         green_bl = np.mean(cv2.inRange(bottom_left, green_lower, green_upper) > 0)
         green_br = np.mean(cv2.inRange(bottom_right, green_lower, green_upper) > 0)
-        if green_bl > 0.08 and green_br > 0.08:
+        if green_bl > 0.08 and green_br > 0.08 and vivid_center < 0.25:
             return GameState.RESULTS
         # Fallback: only RETRY visible + gray results panel in center
         if green_bl > 0.08:
