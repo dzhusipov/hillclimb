@@ -193,15 +193,12 @@ class Navigator:
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.UNKNOWN:
-                print(f"  [NAV] → UNKNOWN state — ADVENTURE tap + BACK + tap center")
+                print(f"  [NAV] → UNKNOWN state — tap ADVENTURE tab")
                 self._save_debug_frame(frame, "unknown")
-                # ADVENTURE tap first: dismisses OFFLINE popup (BACK doesn't)
+                # ADVENTURE tap: dismisses OFFLINE popup, returns from wrong tabs
+                # (BACK would undo the tab switch, so don't use it here)
                 self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-                time.sleep(0.3)
-                self._ctrl.keyevent("KEYCODE_BACK")
-                time.sleep(0.3)
-                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                self._wait_transition(gs, timeout=2.0, min_wait=0.2)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.5)
 
         return False
 
