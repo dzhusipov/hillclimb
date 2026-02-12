@@ -1,19 +1,40 @@
 # TODO
 
-## Ускорение capture: scrcpy видеострим
-Сейчас screencap = 328ms (97.7% step time). Переход на scrcpy H264 stream даст 30+ FPS.
+## [DONE] Ускорение capture: scrcpy видеострим
+scrcpy-server v2.4 + PyAV H.264 декодер. `capture()` ≈ 0ms вместо ~400ms screencap.
 
-- [ ] Запустить `scrcpy --no-display --video-codec=h264 --max-fps=15 --max-size=480` с pipe output
-- [ ] Декодировать H264 через `av` (PyAV) или FFmpeg subprocess
-- [ ] Кольцевой буфер: последний декодированный кадр, `capture()` возвращает мгновенно
-- [ ] Фоновый поток на каждый эмулятор: scrcpy → decode → buffer
-- [ ] Сравнить latency vs текущий RAW screencap
-- [ ] Проверить стабильность на 8 параллельных потоках
+- [x] `hillclimb/scrcpy_capture.py` — ScrcpyCapture класс (raw H.264 → PyAV decode → frame buffer)
+- [x] `hillclimb/capture.py` — фабрика `create_capture()` с fallback scrcpy → raw
+- [x] `hillclimb/config.py` — параметры scrcpy (max_fps, max_size, bitrate, server_jar)
+- [x] `hillclimb/env.py`, `game_loop.py` — переведены на `create_capture()`
+- [x] `scripts/profile_run.py` — `--backend scrcpy` для A/B сравнения
+- [x] `vendor/scrcpy-server.jar` — скачан с GitHub releases
+- [x] `requirements.txt` — добавлен `av>=12.0`
 
-Ожидаемый эффект: step 336ms → ~50-100ms (capture ≈ 0ms, ограничение = action_hold 200ms).
+## [DONE] Navigator: адаптивный polling вместо фиксированных sleep
+- [x] `_wait_transition()` — polling каждые 150ms вместо жёстких sleep(2-3s)
+- [x] Все переходы (MAIN_MENU, VEHICLE_SELECT, DRIVER_DOWN, RESULTS и др.)
+- [x] `_dismiss_popups`, `_relaunch_game`, `_solve_captcha` — уменьшены таймауты
+
+## [DONE] Dashboard: WebSocket streaming 30 FPS
+- [x] `web/server.py` — `/ws/stream/{emu_id}` WebSocket endpoint
+- [x] `web/static/app.js` — WebSocket клиент, auto-reconnect
+- [x] `web/streamer.py` — ScrcpyCapture интеграция, fallback на screencap
+- [x] `docker/Dockerfile.dashboard` — av + scrcpy-server.jar
+- [x] Пересобран образ, CasaOS контейнер перезапущен
+
+## [IN PROGRESS] Переключить game_loop / train на scrcpy backend
+scid баг пофикшен (0x7FFFFFFF), capture_backend переключен на "scrcpy" в config.py.
+Нужно провалидировать на profile_run.
+
+- [x] Фикс scid overflow (Java Integer.parseInt signed 32-bit)
+- [x] `capture_backend: str = "scrcpy"` в config.py
+- [ ] Прогнать `profile_run.py --backend scrcpy` — убедиться что capture ≈ 0ms
+- [ ] Прогнать game_loop на 8 эмуляторах с scrcpy — проверить стабильность
+- [ ] Закоммитить финальное переключение
 
 ## Dashboard: панель обучения
-Сейчас дашборд показывает только стримы и Docker-статусы. Нужна информация об обучении.
+Сейчас дашборд показывает стримы и Docker-статусы. Нужна информация об обучении.
 
 ### Панель метрик (верхняя полоса)
 - [ ] Статус обучения: running / paused / stopped
@@ -24,7 +45,7 @@
 
 ### Карточки эмуляторов — добавить RL-метрики
 - [ ] Game state (RACING / DRIVER_DOWN / RESULTS / ...)
-- [ ] Текущий reward эпизода (累積)
+- [ ] Текущий reward эпизода
 - [ ] Distance (текущая / max за эпизод)
 - [ ] Fuel bar
 - [ ] Текущее действие агента (GAS / BRAKE / NOTHING)
@@ -40,7 +61,6 @@
 - [ ] `GET /api/training/status` — текущие метрики (JSON)
 - [ ] `GET /api/training/history` — история эпизодов (последние N)
 - [ ] Shared state через файл или multiprocessing.Manager (train.py → dashboard)
-- [ ] WebSocket для push-обновлений (вместо polling)
 
 ## Ускорение эмуляторов (speedhack)
 Ускорить игровое время в 2-3x = пропорционально больше эпизодов.
@@ -57,11 +77,10 @@
 - [ ] Подменяет `clock_gettime` — игра думает что время идёт быстрее
 
 ## Оптимизация обучения
-- [ ] Запустить первое обучение с CNN (100k timesteps, 8 envs)
-- [ ] Проверить что reward растёт в TensorBoard
-- [ ] Если ОК — запустить 500k+ с `--resume`
+- [ ] Прогнать обучение с scrcpy capture — ожидаемо 2-3x ускорение
+- [ ] Проверить reward рост в TensorBoard
+- [ ] Запустить 500k+ с `--resume`
 - [ ] Попробовать 12-16 эмуляторов (Ryzen 5600 может потянуть)
-- [ ] Уменьшить sleep'ы в navigator.py (2.0s → 1.0-1.5s)
 
 ## Мелкие задачи
 - [ ] iptables правила в автозагрузку (пропадают после ребута)

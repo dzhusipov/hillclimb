@@ -126,7 +126,7 @@ class ScrcpyCapture:
         self._kill_existing_server()
 
         # Unique session ID
-        self._scid = f"{random.randint(0, 0xFFFFFFFF):08x}"
+        self._scid = f"{random.randint(0, 0x7FFFFFFF):08x}"
         socket_name = f"scrcpy_{self._scid}"
 
         # Start server via ADB shell (non-blocking subprocess)

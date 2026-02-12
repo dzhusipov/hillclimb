@@ -50,7 +50,7 @@ class Config:
     adb_serial: str = "localhost:5555"
 
     # -- Capture --------------------------------------------------------------
-    capture_backend: str = "raw"  # "raw", "png", or "scrcpy"
+    capture_backend: str = "scrcpy"  # "raw", "png", or "scrcpy"
 
     # -- scrcpy streaming (used when capture_backend="scrcpy") ----------------
     scrcpy_max_fps: int = 15
