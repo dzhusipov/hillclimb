@@ -33,6 +33,7 @@ class GameLoop:
             max_size=cfg.scrcpy_max_size,
             bitrate=cfg.scrcpy_bitrate,
             server_jar=cfg.scrcpy_server_jar,
+            dashboard_url=cfg.dashboard_url,
         )
         self._vision = VisionAnalyzer()
         self._controller = ADBController(
@@ -194,6 +195,7 @@ class GameLoop:
             max_size=cfg.scrcpy_max_size,
             bitrate=cfg.scrcpy_bitrate,
             server_jar=cfg.scrcpy_server_jar,
+            dashboard_url=cfg.dashboard_url,
         )
         self._controller = ADBController(
             adb_serial=self._serial,

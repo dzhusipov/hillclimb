@@ -26,7 +26,7 @@ def main():
     parser = argparse.ArgumentParser(description="Profile game step timing")
     parser.add_argument(
         "--backend", default=cfg.capture_backend,
-        choices=["raw", "png", "scrcpy"],
+        choices=["raw", "png", "scrcpy", "dashboard"],
         help=f"Capture backend (default: {cfg.capture_backend})",
     )
     parser.add_argument("--serial", default=SERIAL, help="ADB serial")
@@ -47,6 +47,7 @@ def main():
         max_size=cfg.scrcpy_max_size,
         bitrate=cfg.scrcpy_bitrate,
         server_jar=cfg.scrcpy_server_jar,
+        dashboard_url=cfg.dashboard_url,
     )
     vision = VisionAnalyzer()
     controller = ADBController(

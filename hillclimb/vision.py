@@ -232,10 +232,10 @@ class VisionAnalyzer:
 
         # 0. CAPTCHA ("ARE YOU A ROBOT?"): dark overlay covering entire screen.
         #    Real CAPTCHA has very low overall brightness (~35).
-        #    Main menu with OFFLINE badge has dark top bar but bright center (~95).
+        #    OFFLINE popup over main menu has V~55 — must NOT trigger.
         #    Dark racing maps have visible dials with red needles.
         overall_v = np.mean(hsv[:, :, 2])
-        if overall_v < 75:
+        if overall_v < 50:
             top_8 = hsv[:int(h * 0.08), :]
             t8_dark = np.mean(top_8[:, :, 2] < 80)
             if t8_dark > 0.7:

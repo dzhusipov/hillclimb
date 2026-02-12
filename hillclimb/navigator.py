@@ -137,11 +137,28 @@ class Navigator:
 
             # Transition table
             if gs == GameState.MAIN_MENU:
+                if self._same_state_count >= 1:
+                    # RACE tap didn't work — likely OFFLINE popup blocking.
+                    # Dismiss by tapping ADVENTURE tab (BACK does NOT work).
+                    print(f"  [NAV] → MAIN_MENU stuck — tap ADVENTURE to dismiss OFFLINE")
+                    self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+                    time.sleep(0.5)
                 print(f"  [NAV] → tap RACE button ({cfg.race_button.x}, {cfg.race_button.y})")
                 self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.VEHICLE_SELECT:
+                if self._same_state_count >= 1:
+                    # START didn't work — likely a LOCKED popup or wrong vehicle.
+                    # 1. BACK to dismiss any popup (LOCKED, etc.)
+                    print(f"  [NAV] → VEHICLE_SELECT stuck — BACK + swipe to first vehicle")
+                    self._ctrl.keyevent("KEYCODE_BACK")
+                    time.sleep(0.3)
+                    # 2. Swipe right 5× to scroll back to the first vehicle
+                    for _ in range(5):
+                        self._ctrl.swipe(200, 250, 600, 250, 200)
+                        time.sleep(0.2)
+                    time.sleep(0.3)
                 print(f"  [NAV] → tap START ({cfg.start_button.x}, {cfg.start_button.y})")
                 self._ctrl.tap(cfg.start_button.x, cfg.start_button.y)
                 self._wait_transition(gs, timeout=4.0, min_wait=0.5)
@@ -176,8 +193,11 @@ class Navigator:
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.UNKNOWN:
-                print(f"  [NAV] → UNKNOWN state — BACK + tap center")
+                print(f"  [NAV] → UNKNOWN state — ADVENTURE tap + BACK + tap center")
                 self._save_debug_frame(frame, "unknown")
+                # ADVENTURE tap first: dismisses OFFLINE popup (BACK doesn't)
+                self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+                time.sleep(0.3)
                 self._ctrl.keyevent("KEYCODE_BACK")
                 time.sleep(0.3)
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)

@@ -43,11 +43,13 @@ class ScrcpyCapture:
         max_size: int = 800,
         bitrate: int = 2_000_000,
         server_jar: str = _DEFAULT_JAR,
+        stale_timeout: float = 2.0,
     ) -> None:
         self._serial = adb_serial
         self._max_fps = max_fps
         self._max_size = max_size
         self._bitrate = bitrate
+        self._stale_timeout = stale_timeout
 
         # Resolve relative jar path to project root
         jar_path = Path(server_jar)
@@ -113,12 +115,18 @@ class ScrcpyCapture:
         )
 
     def _kill_existing_server(self) -> None:
-        """Kill any leftover scrcpy-server processes."""
-        try:
-            self._adb_shell("pkill -f 'app_process.*scrcpy'", timeout=5)
-        except Exception:
-            pass
-        time.sleep(0.3)
+        """Kill only our own scrcpy-server (by scid), not other instances.
+
+        Avoids killing dashboard's scrcpy servers when training starts.
+        """
+        if self._scid:
+            try:
+                self._adb_shell(
+                    f"pkill -f 'scid={self._scid}'", timeout=5,
+                )
+            except Exception:
+                pass
+            time.sleep(0.3)
 
     def _start(self) -> None:
         """Start scrcpy-server, set up tunnel, launch decode thread."""
@@ -269,13 +277,22 @@ class ScrcpyCapture:
     def capture(self) -> np.ndarray:
         """Return latest frame (BGR, H×W×3). Near-instant (~0ms).
 
-        Falls back to ADB screencap if stream is stale (>2s).
+        Falls back to ADB screencap if stream is stale (>stale_timeout).
+        If stale_timeout <= 0, always returns the last buffered frame
+        without fallback (useful for dashboard where stale == static screen).
         """
         with self._frame_lock:
             frame = self._frame
             age = time.time() - self._frame_time if self._frame_time else 999
 
-        if frame is not None and age < 2.0:
+        # No stale check — always return last frame if available
+        if self._stale_timeout <= 0:
+            if frame is not None:
+                return frame
+            # No frame yet — must fallback
+            return self._screencap_fallback()
+
+        if frame is not None and age < self._stale_timeout:
             return frame
 
         # Fallback to screencap

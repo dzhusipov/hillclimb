@@ -122,17 +122,35 @@ def create_capture(
 
     Args:
         adb_serial: ADB device serial.
-        backend: ``"raw"``, ``"png"``, or ``"scrcpy"``.
+        backend: ``"raw"``, ``"png"``, ``"scrcpy"``, or ``"dashboard"``.
         **kwargs: Extra arguments forwarded to the backend constructor.
 
     Returns:
         An object with ``.capture()`` / ``.grab()`` / ``.close()`` API.
     """
+    if backend == "dashboard":
+        try:
+            from hillclimb.dashboard_capture import DashboardCapture
+
+            dash_kwargs = {}
+            if "dashboard_url" in kwargs:
+                dash_kwargs["dashboard_url"] = kwargs["dashboard_url"]
+            return DashboardCapture(adb_serial=adb_serial, **dash_kwargs)
+        except Exception as e:
+            logger.warning(
+                "dashboard capture failed on %s: %s — falling back to raw",
+                adb_serial, e,
+            )
+            return ScreenCapture(adb_serial=adb_serial, backend="raw")
     if backend == "scrcpy":
         try:
             from hillclimb.scrcpy_capture import ScrcpyCapture
 
-            return ScrcpyCapture(adb_serial=adb_serial, **kwargs)
+            # Filter out dashboard_url — not accepted by ScrcpyCapture
+            scrcpy_kwargs = {
+                k: v for k, v in kwargs.items() if k != "dashboard_url"
+            }
+            return ScrcpyCapture(adb_serial=adb_serial, **scrcpy_kwargs)
         except Exception as e:
             logger.warning(
                 "scrcpy capture failed on %s: %s — falling back to raw",
@@ -151,7 +169,7 @@ def main() -> None:
         "--serial", default="localhost:5555", help="ADB serial"
     )
     parser.add_argument(
-        "--backend", default="png", choices=["png", "raw", "scrcpy"],
+        "--backend", default="png", choices=["png", "raw", "scrcpy", "dashboard"],
     )
     parser.add_argument("--benchmark", type=int, default=0, help="Run N captures")
     args = parser.parse_args()

@@ -83,6 +83,7 @@ class EmulatorStream:
     def _stream_loop(self) -> None:
         """Background loop: grab frames, JPEG-encode, store."""
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+        prev_img = None   # track numpy array identity to skip unchanged frames
 
         # Try scrcpy first
         self._try_init_scrcpy()
@@ -93,6 +94,14 @@ class EmulatorStream:
                 if img is None:
                     time.sleep(OFFLINE_RETRY_INTERVAL)
                     continue
+
+                # Skip JPEG encode if frame hasn't changed (same numpy object).
+                # On static screens scrcpy returns the same cached array,
+                # so we avoid 30 FPS of redundant encodes + WS sends.
+                if img is prev_img:
+                    time.sleep(SCRCPY_INTERVAL)
+                    continue
+                prev_img = img
 
                 # JPEG encode
                 _, jpeg = cv2.imencode(".jpg", img, encode_params)
@@ -122,6 +131,7 @@ class EmulatorStream:
                 max_fps=SCRCPY_FPS,
                 max_size=800,
                 bitrate=2_000_000,
+                stale_timeout=0,  # static screen = last frame, no fallback
             )
             # ScrcpyCapture already rotates portrait → landscape
             self._rotated = True          # raw capture was portrait
