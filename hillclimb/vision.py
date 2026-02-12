@@ -260,7 +260,12 @@ class VisionAnalyzer:
                         )
                         if _db > 30 and np.mean(_nm > 0) > 0.025:
                             _is_racing = True
-                    if not _is_racing:
+                    # Guard: tab bar bright pixels → menu screen, not CAPTCHA
+                    #   Real CAPTCHA: dark overlay covers tabs → tab_bright = 0
+                    #   OFFLINE/loading menu: tabs visible → tab_bright ≈ 0.07
+                    _tab = hsv[int(h * 0.04):int(h * 0.08), :]
+                    _tab_bright = np.mean(_tab[:, :, 2] > 150)
+                    if not _is_racing and _tab_bright < 0.03:
                         return GameState.CAPTCHA
 
         # 1. DRIVER_DOWN: orange star burst in upper-center area
