@@ -76,13 +76,15 @@ class HillClimbEnv(gym.Env):
             brake_y=cfg.brake_button.y,
             action_hold_ms=cfg.action_hold_ms,
         )
-        self._navigator = Navigator(
-            self._controller, self._capture, self._vision,
-        )
-
         # Container name for watchdog restart
         port = int(adb_serial.split(":")[-1])
         self._container_name = f"hcr2-{port - 5555}"
+        self._env_index = port - 5555
+
+        self._navigator = Navigator(
+            self._controller, self._capture, self._vision,
+            env_index=self._env_index,
+        )
 
         self._prev_state: VisionState | None = None
         self._step_count = 0
@@ -316,6 +318,7 @@ class HillClimbEnv(gym.Env):
         )
         self._navigator = Navigator(
             self._controller, self._capture, self._vision,
+            env_index=self._env_index,
         )
         self._controller.shell("am start -n com.fingersoft.hcr2/.AppActivity")
         time.sleep(8)

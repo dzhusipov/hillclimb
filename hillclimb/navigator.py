@@ -8,13 +8,17 @@ Plus: DOUBLE_COINS_POPUP (skip), UNKNOWN (fallback tap).
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 from hillclimb.config import cfg
 from hillclimb.vision import GameState, VisionState
+
+NAV_EVENTS_JSONL = Path(cfg.log_dir) / "nav_events.jsonl"
 
 if TYPE_CHECKING:
     from hillclimb.capture import ScreenCapture
@@ -30,15 +34,40 @@ class Navigator:
         controller: ADBController,
         capture: ScreenCapture,
         vision: VisionAnalyzer,
+        env_index: int = 0,
     ) -> None:
         self._ctrl = controller
         self._cap = capture
         self._vision = vision
+        self._env_index = env_index
         self._last_results: VisionState | None = None
         self._same_state_count = 0
         self._prev_state: GameState | None = None
         self._racing_stuck_count = 0
         self._captcha_relaunch_count = 0
+
+    def _log_nav_event(
+        self,
+        event: str,
+        state_before: str,
+        state_after: str,
+        action: str,
+        details: dict | None = None,
+    ) -> None:
+        """Append navigation event to nav_events.jsonl (O_APPEND safe)."""
+        NAV_EVENTS_JSONL.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "timestamp": time.time(),
+            "env_idx": self._env_index,
+            "event": event,
+            "state_before": state_before,
+            "state_after": state_after,
+            "action": action,
+        }
+        if details:
+            record["details"] = details
+        with open(NAV_EVENTS_JSONL, "a") as f:
+            f.write(json.dumps(record) + "\n")
 
     def _wait_transition(
         self,
@@ -93,6 +122,7 @@ class Navigator:
             if h > w:
                 print(f"  [NAV] Portrait frame ({w}x{h}) — not in game, relaunching...")
                 self._save_debug_frame(frame, "not_in_game")
+                self._log_nav_event("crash_detected", "PORTRAIT", "", "relaunch")
                 self._relaunch_game()
                 continue
 
@@ -112,6 +142,8 @@ class Navigator:
             if self._same_state_count >= 3 and gs != GameState.RACING:
                 print(f"  [NAV] STUCK on {gs.name} for {self._same_state_count} cycles — fallback tap center")
                 self._save_debug_frame(frame, f"stuck_{gs.name}")
+                self._log_nav_event("stuck_detected", gs.name, gs.name, "tap_center",
+                                    {"cycles": self._same_state_count})
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 self._wait_transition(gs, timeout=2.0, min_wait=0.3)
                 self._same_state_count = 0
@@ -137,13 +169,11 @@ class Navigator:
 
             # Transition table
             if gs == GameState.MAIN_MENU:
-                if self._same_state_count >= 1:
-                    # RACE tap didn't work — likely OFFLINE popup blocking.
-                    # Dismiss by tapping ADVENTURE tab (BACK does NOT work).
-                    print(f"  [NAV] → MAIN_MENU stuck — tap ADVENTURE to dismiss OFFLINE")
-                    self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-                    time.sleep(0.5)
-                print(f"  [NAV] → tap RACE button ({cfg.race_button.x}, {cfg.race_button.y})")
+                # Всегда сначала ADVENTURE — гарантирует правильный таб
+                # (CUPS/TEAM/EVENTS тоже детектятся как MAIN_MENU)
+                self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+                time.sleep(0.4)
+                print(f"  [NAV] → ADVENTURE + RACE ({cfg.race_button.x}, {cfg.race_button.y})")
                 self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
@@ -169,11 +199,11 @@ class Navigator:
                 self._wait_transition(gs, timeout=3.0, min_wait=0.3)
 
             elif gs == GameState.DRIVER_DOWN:
-                print(f"  [NAV] → DRIVER_DOWN — BACK to skip second chance")
-                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                time.sleep(0.2)
-                self._ctrl.keyevent("KEYCODE_BACK")
-                self._wait_transition(gs, timeout=2.0, min_wait=0.2)
+                # НЕ тапаем центр — там RESPAWN (тратит токены)
+                # Тапаем в безопасную зону (левый верх) — пропустить анимацию
+                print(f"  [NAV] → DRIVER_DOWN — tap safe area (skip respawn)")
+                self._ctrl.tap(50, 50)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.TOUCH_TO_CONTINUE:
                 print(f"  [NAV] → tap center (TOUCH_TO_CONTINUE)")
@@ -189,16 +219,31 @@ class Navigator:
             elif gs == GameState.CAPTCHA:
                 print(f"  [NAV] → solving CAPTCHA...")
                 self._save_debug_frame(frame, "captcha")
+                self._log_nav_event("captcha_detected", gs.name, "", "solve_captcha")
                 self._solve_captcha(frame)
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.UNKNOWN:
-                print(f"  [NAV] → UNKNOWN state — tap ADVENTURE tab")
                 self._save_debug_frame(frame, "unknown")
-                # ADVENTURE tap: dismisses OFFLINE popup, returns from wrong tabs
-                # (BACK would undo the tab switch, so don't use it here)
-                self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-                self._wait_transition(gs, timeout=2.0, min_wait=0.5)
+                if self._same_state_count < 2:
+                    # Первая попытка: ADVENTURE tap — пробивает OFFLINE overlay,
+                    # переключает неправильный таб (CUPS/TEAM/SHOP)
+                    print(f"  [NAV] → UNKNOWN — ADVENTURE tab")
+                    self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+                    self._wait_transition(gs, timeout=2.0, min_wait=0.5)
+                elif self._same_state_count < 4:
+                    # ADVENTURE не помог — PAUSED или другой попап без табов
+                    # Тап центр экрана (RESUME на PAUSED, dismiss на попапах)
+                    print(f"  [NAV] → UNKNOWN stuck — tap center")
+                    self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
+                    self._wait_transition(gs, timeout=2.0, min_wait=0.3)
+                else:
+                    # Ничего не помогает — relaunch
+                    print(f"  [NAV] → UNKNOWN stuck {self._same_state_count}× — relaunch")
+                    self._log_nav_event("stuck_detected", gs.name, "", "relaunch",
+                                        {"cycles": self._same_state_count})
+                    self._relaunch_game()
+                    self._same_state_count = 0
 
         return False
 

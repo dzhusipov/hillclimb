@@ -4,13 +4,54 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HCR2 Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css?v=3">
+    <link rel="stylesheet" href="/static/style.css?v=4">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <header>
         <h1>HCR2 Dashboard</h1>
         <span class="subtitle" id="emu-count"></span>
     </header>
+
+    <!-- Training metrics panel -->
+    <div id="training-panel" class="training-panel">
+        <div class="training-header">
+            <h2>RL Training</h2>
+            <span id="training-status" class="training-badge">---</span>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div class="stat-label">Episode</div>
+                <div class="stat-value" id="stat-episode">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Timesteps</div>
+                <div class="stat-value" id="stat-timesteps">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Best Distance</div>
+                <div class="stat-value" id="stat-best">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Avg (10)</div>
+                <div class="stat-value" id="stat-avg">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Eps/Hour</div>
+                <div class="stat-value" id="stat-eph">-</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="distance-chart"></canvas>
+        </div>
+
+        <div class="events-log">
+            <h3>Nav Events</h3>
+            <div id="events-list"></div>
+        </div>
+    </div>
 
     <div class="grid" id="emulator-grid">
         {% for emu in emulators %}
@@ -52,6 +93,6 @@
         {% endfor %}
     </div>
 
-    <script src="/static/app.js?v=3"></script>
+    <script src="/static/app.js?v=4"></script>
 </body>
 </html>

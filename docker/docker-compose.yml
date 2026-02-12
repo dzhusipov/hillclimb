@@ -112,6 +112,7 @@ services:
       - "8150:8150"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ../logs:/app/logs:ro
     depends_on:
       - hcr2-0
       - hcr2-1

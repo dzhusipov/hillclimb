@@ -1,11 +1,14 @@
 """FastAPI web dashboard for HCR2 emulator monitoring."""
 
 import asyncio
+import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -34,6 +37,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
+LOGS_DIR = Path("/app/logs") if Path("/app/logs").exists() else BASE_DIR.parent / "logs"
 stream_manager = StreamManager()
 
 
@@ -182,3 +186,67 @@ async def api_touch(emu_id: int, event: TouchEvent):
     else:
         return JSONResponse(content={"ok": False, "message": "Unknown action"}, status_code=400)
     return JSONResponse(content={"ok": ok, "message": msg})
+
+
+# ---------------------------------------------------------------------------
+# Training metrics API
+# ---------------------------------------------------------------------------
+
+def _read_jsonl_tail(filepath: Path, limit: int, env_idx: Optional[int] = None,
+                     event_type: Optional[str] = None) -> list[dict]:
+    """Read last `limit` lines from a JSONL file with optional filtering."""
+    if not filepath.exists():
+        return []
+    records: list[dict] = []
+    with open(filepath) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if env_idx is not None and rec.get("env_idx") != env_idx:
+                continue
+            if event_type is not None and rec.get("event") != event_type:
+                continue
+            records.append(rec)
+    return records[-limit:]
+
+
+@app.get("/api/training/status")
+async def api_training_status():
+    """Current training status (atomic JSON, updated every 10 episodes)."""
+    status_file = LOGS_DIR / "training_status.json"
+    if not status_file.exists():
+        return {"training_active": False}
+    try:
+        with open(status_file) as f:
+            data = json.load(f)
+        data["stale"] = (time.time() - data.get("last_update", 0)) > 120
+        return data
+    except (json.JSONDecodeError, KeyError):
+        return {"training_active": False, "error": "corrupted"}
+
+
+@app.get("/api/training/episodes")
+async def api_training_episodes(
+    limit: int = Query(default=200, ge=1, le=2000),
+    env_idx: Optional[int] = Query(default=None),
+):
+    """Last N training episodes (JSONL)."""
+    episodes = _read_jsonl_tail(LOGS_DIR / "train_episodes.jsonl", limit, env_idx=env_idx)
+    return {"episodes": episodes, "total": len(episodes)}
+
+
+@app.get("/api/training/events")
+async def api_training_events(
+    limit: int = Query(default=50, ge=1, le=500),
+    env_idx: Optional[int] = Query(default=None),
+    event_type: Optional[str] = Query(default=None),
+):
+    """Last N navigation events (JSONL)."""
+    events = _read_jsonl_tail(LOGS_DIR / "nav_events.jsonl", limit,
+                              env_idx=env_idx, event_type=event_type)
+    return {"events": events}

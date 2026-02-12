@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import time
 from pathlib import Path
 
 from hillclimb.config import cfg
+
+LOG_DIR = Path(cfg.log_dir)
+EPISODES_JSONL = LOG_DIR / "train_episodes.jsonl"
+STATUS_JSON = LOG_DIR / "training_status.json"
 
 
 def linear_schedule(initial_value: float):
@@ -16,22 +22,40 @@ def linear_schedule(initial_value: float):
     return _schedule
 
 
-class EpisodeLogCallback:
-    """Callback для логирования каждого эпизода в консоль (multi-env aware)."""
+def _write_status(data: dict) -> None:
+    """Atomically write training_status.json via temp + os.replace."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATUS_JSON.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    os.replace(tmp, STATUS_JSON)
 
-    def __init__(self, num_envs: int = 1):
+
+def _append_episode(record: dict) -> None:
+    """Append one JSON line to train_episodes.jsonl (O_APPEND safe)."""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(EPISODES_JSONL, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+class EpisodeLogCallback:
+    """Callback для логирования каждого эпизода в консоль + JSONL (multi-env aware)."""
+
+    def __init__(self, num_envs: int = 1, total_timesteps: int = 0):
         from stable_baselines3.common.callbacks import BaseCallback
 
         class _Inner(BaseCallback):
             def __init__(inner_self):
                 super().__init__()
                 inner_self._num_envs = num_envs
+                inner_self._total_target = total_timesteps
                 inner_self._episode_count = 0
                 inner_self._episode_rewards = [0.0] * num_envs
                 inner_self._episode_steps = [0] * num_envs
                 inner_self._episode_starts = [time.time()] * num_envs
                 inner_self._best_distance = 0.0
                 inner_self._train_start = time.time()
+                inner_self._recent_distances: list[float] = []
 
             def _on_step(inner_self) -> bool:
                 infos = inner_self.locals.get("infos", [])
@@ -64,6 +88,38 @@ class EpisodeLogCallback:
                             f"{inner_self.num_timesteps}/{inner_self.locals.get('total_timesteps', '?')} | "
                             f"{total_t/60:.1f}min | {gs}"
                         )
+
+                        # JSONL episode log
+                        _append_episode({
+                            "episode": inner_self._episode_count,
+                            "env_idx": i,
+                            "timestamp": time.time(),
+                            "distance": dist,
+                            "reward": round(inner_self._episode_rewards[i], 1),
+                            "steps": inner_self._episode_steps[i],
+                            "duration_s": round(dt, 1),
+                            "state_final": gs,
+                        })
+
+                        # Atomic status update every 10 episodes
+                        inner_self._recent_distances.append(dist)
+                        if len(inner_self._recent_distances) > 10:
+                            inner_self._recent_distances = inner_self._recent_distances[-10:]
+                        if inner_self._episode_count % 10 == 0:
+                            elapsed_h = total_t / 3600
+                            _write_status({
+                                "training_active": True,
+                                "current_episode": inner_self._episode_count,
+                                "total_timesteps": inner_self.num_timesteps,
+                                "total_target": inner_self._total_target,
+                                "best_distance": inner_self._best_distance,
+                                "avg_distance_10": round(
+                                    sum(inner_self._recent_distances) / len(inner_self._recent_distances), 1
+                                ),
+                                "episodes_per_hour": round(inner_self._episode_count / max(elapsed_h, 0.001)),
+                                "last_update": time.time(),
+                            })
+
                         inner_self._episode_rewards[i] = 0.0
                         inner_self._episode_steps[i] = 0
                         inner_self._episode_starts[i] = time.time()
@@ -161,7 +217,7 @@ def train(
         save_path=str(model_dir / "checkpoints"),
         name_prefix="ppo_hillclimb",
     )
-    episode_cb = EpisodeLogCallback(num_envs=num_envs).create()
+    episode_cb = EpisodeLogCallback(num_envs=num_envs, total_timesteps=total_timesteps).create()
 
     print(f"Training for {total_timesteps} timesteps (n_steps={n_steps}, batch={batch_size})")
     print(f"Config: lr={cfg.learning_rate}, envs={num_envs}, rollout={effective_rollout}")
@@ -187,6 +243,9 @@ def train(
 
     model.save(str(save_path))
     print(f"Model saved to {save_path}")
+
+    # Mark training as inactive
+    _write_status({"training_active": False, "last_update": time.time()})
 
     env.close()
 
