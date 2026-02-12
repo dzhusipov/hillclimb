@@ -9,6 +9,13 @@ from pathlib import Path
 from hillclimb.config import cfg
 
 
+def linear_schedule(initial_value: float):
+    """Linear decay from initial_value to 0."""
+    def _schedule(progress_remaining: float) -> float:
+        return progress_remaining * initial_value
+    return _schedule
+
+
 class EpisodeLogCallback:
     """Callback для логирования каждого эпизода в консоль (multi-env aware)."""
 
@@ -69,10 +76,14 @@ class EpisodeLogCallback:
 
 
 def make_env(adb_serial: str, render_mode: str | None = None):
-    """Factory function for SubprocVecEnv."""
+    """Factory function for SubprocVecEnv (applies TimeLimit wrapper)."""
     def _init():
+        from gymnasium.wrappers import TimeLimit
+
         from hillclimb.env import HillClimbEnv
-        return HillClimbEnv(adb_serial=adb_serial, render_mode=render_mode)
+        env = HillClimbEnv(adb_serial=adb_serial, render_mode=render_mode)
+        env = TimeLimit(env, max_episode_steps=cfg.max_episode_steps)
+        return env
     return _init
 
 
@@ -82,13 +93,16 @@ def train(
     render: bool = False,
     resume: str | None = None,
 ) -> None:
-    """Train a PPO agent."""
+    """Train a PPO agent with CNN+MLP (MultiInputPolicy)."""
     import torch
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
-    from stable_baselines3.common.vec_env import SubprocVecEnv
-
-    from hillclimb.env import HillClimbEnv
+    from stable_baselines3.common.vec_env import (
+        SubprocVecEnv,
+        VecFrameStack,
+        VecMonitor,
+        VecTransposeImage,
+    )
 
     total_timesteps = total_timesteps or cfg.total_timesteps
 
@@ -105,10 +119,10 @@ def train(
     serials = [cfg.emulator_serial(i) for i in range(num_envs)]
     print(f"Emulators ({num_envs}): {', '.join(serials)}")
 
-    if num_envs == 1:
-        env = HillClimbEnv(adb_serial=serials[0], render_mode=render_mode)
-    else:
-        env = SubprocVecEnv([make_env(s, render_mode) for s in serials])
+    env = SubprocVecEnv([make_env(s, render_mode) for s in serials])
+    env = VecMonitor(env)
+    env = VecFrameStack(env, n_stack=cfg.n_stack)
+    env = VecTransposeImage(env)
 
     # Model directory
     model_dir = Path(cfg.model_dir)
@@ -124,11 +138,18 @@ def train(
         model = PPO.load(resume, env=env, device=device)
     else:
         model = PPO(
-            "MlpPolicy",
+            "MultiInputPolicy",
             env,
-            learning_rate=cfg.learning_rate,
+            learning_rate=linear_schedule(cfg.learning_rate),
             batch_size=batch_size,
             n_steps=n_steps,
+            n_epochs=cfg.n_epochs,
+            gamma=cfg.gamma,
+            gae_lambda=cfg.gae_lambda,
+            clip_range=linear_schedule(cfg.clip_range),
+            ent_coef=cfg.ent_coef,
+            vf_coef=cfg.vf_coef,
+            max_grad_norm=cfg.max_grad_norm,
             verbose=1,
             device=device,
             tensorboard_log=str(Path(cfg.log_dir) / "tensorboard"),
@@ -144,7 +165,9 @@ def train(
 
     print(f"Training for {total_timesteps} timesteps (n_steps={n_steps}, batch={batch_size})")
     print(f"Config: lr={cfg.learning_rate}, envs={num_envs}, rollout={effective_rollout}")
-    print(f"Actions: Discrete(3) — 0=nothing, 1=gas, 2=brake")
+    print(f"PPO: n_epochs={cfg.n_epochs}, gamma={cfg.gamma}, clip={cfg.clip_range}, ent={cfg.ent_coef}")
+    print(f"Obs: image(84,84,{cfg.n_stack}) + vector({6 * cfg.n_stack},) | Policy: MultiInputPolicy")
+    print(f"Actions: Discrete(3) — 0=nothing, 1=gas, 2=brake | hold={cfg.action_hold_ms}ms")
     print("-" * 70)
 
     save_path = model_dir / "ppo_hillclimb"

@@ -13,24 +13,27 @@ from hillclimb.capture import ScreenCapture
 from hillclimb.config import cfg
 from hillclimb.controller import ADBConnectionError, ADBController, Action
 from hillclimb.navigator import Navigator
-from hillclimb.vision import GameState, VisionAnalyzer, VisionState
+from hillclimb.vision import GameState, VisionAnalyzer, VisionState, extract_game_field
 
 
 class HillClimbEnv(gym.Env):
     """Gymnasium-compatible environment for Hill Climb Racing 2.
 
-    Observation: 8-dim float32 vector
-        [fuel, rpm, boost, tilt_norm, terrain_slope_norm,
-         airborne, speed_estimate, distance_norm]
+    Observation: Dict
+        "image": (84, 84, 1) uint8 — grayscale game field crop
+        "vector": (6,) float32 — [fuel, distance_m, speed, fuel_delta,
+                                   distance_delta, time_since_progress]
 
     Action: Discrete(3)
         0 = nothing, 1 = gas, 2 = brake
 
     Reward:
-        +0.1 * distance_delta_m  (actual metres gained via OCR)
-        -10.0 if crashed (DRIVER_DOWN)
-        +0.5 if moving with fuel remaining
-        tilt-based balance bonus/penalty
+        +distance_delta * 1.0 (main signal)
+        +speed * 0.1 (speed bonus)
+        -5.0 if crashed
+        +0.5 if fuel picked up
+        -0.05 * (0.2 - fuel) / 0.2 when fuel < 0.2
+        -0.1 if stalled (no progress while RACING)
     """
 
     metadata = {"render_modes": ["human"]}
@@ -42,14 +45,20 @@ class HillClimbEnv(gym.Env):
     ) -> None:
         super().__init__()
 
-        self.observation_space = spaces.Box(
-            low=0.0, high=1.0, shape=(8,), dtype=np.float32,
-        )
+        size = cfg.game_field_size
+        self.observation_space = spaces.Dict({
+            "image": spaces.Box(0, 255, shape=(size, size, 1), dtype=np.uint8),
+            "vector": spaces.Box(
+                low=np.array([0.0, 0.0, 0.0, -1.0, -100.0, 0.0], dtype=np.float32),
+                high=np.array([1.0, 10000.0, 1.0, 1.0, 100.0, 300.0], dtype=np.float32),
+                dtype=np.float32,
+            ),
+        })
         self.action_space = spaces.Discrete(3)
         self.render_mode = render_mode
 
         self._serial = adb_serial
-        self._capture = ScreenCapture(adb_serial=adb_serial)
+        self._capture = ScreenCapture(adb_serial=adb_serial, backend=cfg.capture_backend)
         self._vision = VisionAnalyzer()
         self._controller = ADBController(
             adb_serial=adb_serial,
@@ -70,7 +79,11 @@ class HillClimbEnv(gym.Env):
         self._prev_state: VisionState | None = None
         self._step_count = 0
         self._max_distance_m = 0.0
-        self._zero_speed_count = 0
+        # Tracking for vector obs
+        self._prev_distance_m = 0.0
+        self._prev_fuel = 1.0
+        self._last_progress_time = 0.0
+        self._episode_start_time = 0.0
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -81,7 +94,7 @@ class HillClimbEnv(gym.Env):
         *,
         seed: int | None = None,
         options: dict | None = None,
-    ) -> tuple[np.ndarray, dict]:
+    ) -> tuple[dict, dict]:
         super().reset(seed=seed)
 
         try:
@@ -102,46 +115,53 @@ class HillClimbEnv(gym.Env):
         try:
             frame = self._capture.capture()
         except (RuntimeError, Exception):
-            # Return zero observation — SB3 will call step() which will end episode
             self._prev_state = None
             self._step_count = 0
             self._max_distance_m = 0.0
-            self._zero_speed_count = 0
-            return np.zeros(8, dtype=np.float32), {}
+            self._prev_distance_m = 0.0
+            self._prev_fuel = 1.0
+            self._episode_start_time = time.time()
+            self._last_progress_time = time.time()
+            return self._zero_obs(), {}
 
         state = self._vision.analyze(frame)
         self._prev_state = state
         self._step_count = 0
         self._max_distance_m = 0.0
-        self._zero_speed_count = 0
+        self._prev_distance_m = state.distance_m
+        self._prev_fuel = state.fuel
+        self._episode_start_time = time.time()
+        self._last_progress_time = time.time()
 
-        return state.to_array(), {}
+        return self._build_obs(frame, state), {}
 
     def step(
         self, action: int | np.ndarray,
-    ) -> tuple[np.ndarray, float, bool, bool, dict]:
+    ) -> tuple[dict, float, bool, bool, dict]:
         self._step_count += 1
 
         action_enum = Action(int(action))
 
-        # Execute action
+        # Fire action in background — overlaps with capture below
         try:
-            self._controller.execute(action_enum, duration_ms=cfg.action_hold_ms)
+            self._controller.execute_async(action_enum, duration_ms=cfg.action_hold_ms)
         except (ADBConnectionError, RuntimeError):
             print(f"[ENV {self._serial}] ADB error during step — ending episode")
-            obs = self._prev_state.to_array() if self._prev_state else np.zeros(8, dtype=np.float32)
-            return obs, -10.0, True, False, {
+            obs = self._prev_obs if hasattr(self, '_prev_obs') else self._zero_obs()
+            return obs, -5.0, True, False, {
                 "game_state": "ADB_DISCONNECTED",
                 "max_distance_m": self._max_distance_m,
                 "step": self._step_count,
             }
 
+        # Capture while action is executing (action_hold=200ms < capture≈300ms,
+        # so action fully completes before capture data returns)
         try:
             frame = self._capture.capture()
         except (RuntimeError, Exception) as e:
             print(f"[ENV {self._serial}] Capture failed: {e} — ending episode")
-            obs = self._prev_state.to_array() if self._prev_state else np.zeros(8, dtype=np.float32)
-            return obs, -10.0, True, False, {
+            obs = self._prev_obs if hasattr(self, '_prev_obs') else self._zero_obs()
+            return obs, -5.0, True, False, {
                 "game_state": "CAPTURE_FAILED",
                 "max_distance_m": self._max_distance_m,
                 "step": self._step_count,
@@ -158,7 +178,7 @@ class HillClimbEnv(gym.Env):
                 state = self._vision.analyze(frame)
             else:
                 print(f"  [ENV] Could not recover from {state.game_state.name} — ending episode")
-                obs = self._prev_state.to_array() if self._prev_state else np.zeros(8, dtype=np.float32)
+                obs = self._prev_obs if hasattr(self, '_prev_obs') else self._zero_obs()
                 return obs, 0.0, True, False, {
                     "game_state": state.game_state.name,
                     "max_distance_m": self._max_distance_m,
@@ -166,25 +186,19 @@ class HillClimbEnv(gym.Env):
                 }
 
         reward = self._compute_reward(self._prev_state, state)
+        obs = self._build_obs(frame, state)
 
-        terminated = state.game_state not in (
-            GameState.RACING,
-            GameState.CAPTCHA,
-            GameState.DOUBLE_COINS_POPUP,
+        # Episode termination — only explicit crash/end states
+        terminated = state.game_state in (
+            GameState.DRIVER_DOWN,
+            GameState.TOUCH_TO_CONTINUE,
+            GameState.RESULTS,
         )
         truncated = False
 
-        if state.fuel <= 0.01 and state.speed_estimate < 0.05:
-            terminated = True
-
-        # Stuck detection: speed≈0 for 5+ steps → end episode
-        if state.game_state == GameState.RACING and state.speed_estimate < 0.02:
-            self._zero_speed_count += 1
-            if self._zero_speed_count >= 5:
-                print(f"  [ENV] Car stuck (speed=0 for {self._zero_speed_count} steps) — ending episode")
-                terminated = True
-        else:
-            self._zero_speed_count = 0
+        # UNKNOWN — try to navigate back, don't kill episode
+        if state.game_state == GameState.UNKNOWN:
+            self._navigator.ensure_racing(timeout=5.0)
 
         # Track max distance (filter OCR jumps > 100m)
         if state.game_state == GameState.RACING and state.distance_m > self._max_distance_m:
@@ -193,6 +207,7 @@ class HillClimbEnv(gym.Env):
                 self._max_distance_m = state.distance_m
 
         self._prev_state = state
+        self._prev_obs = obs
 
         info: dict = {
             "game_state": state.game_state.name,
@@ -208,7 +223,57 @@ class HillClimbEnv(gym.Env):
             cv2.imshow(f"hillclimb-env-{self._serial}", debug)
             cv2.waitKey(1)
 
-        return state.to_array(), reward, terminated, truncated, info
+        return obs, reward, terminated, truncated, info
+
+    # ------------------------------------------------------------------
+    # Observation builder
+    # ------------------------------------------------------------------
+
+    def _build_obs(self, frame: np.ndarray, state: VisionState) -> dict:
+        """Build Dict observation from frame and vision state."""
+        image = extract_game_field(frame)
+
+        # Compute deltas
+        distance_delta = state.distance_m - self._prev_distance_m
+        # Filter OCR glitches
+        if abs(distance_delta) > 100:
+            distance_delta = 0.0
+        fuel_delta = state.fuel - self._prev_fuel
+
+        # Track progress time
+        if distance_delta > 0.5:
+            self._last_progress_time = time.time()
+        time_since_progress = time.time() - self._last_progress_time
+
+        # Speed: use RPM as proxy (more reliable than optical flow)
+        speed = state.rpm
+
+        vector = np.array([
+            state.fuel,
+            state.distance_m,
+            speed,
+            fuel_delta,
+            distance_delta,
+            time_since_progress,
+        ], dtype=np.float32)
+
+        # Update tracking
+        self._prev_distance_m = state.distance_m
+        self._prev_fuel = state.fuel
+
+        return {"image": image, "vector": vector}
+
+    def _zero_obs(self) -> dict:
+        """Return zeroed observation for error cases."""
+        size = cfg.game_field_size
+        return {
+            "image": np.zeros((size, size, 1), dtype=np.uint8),
+            "vector": np.zeros(6, dtype=np.float32),
+        }
+
+    # ------------------------------------------------------------------
+    # Container restart
+    # ------------------------------------------------------------------
 
     def _restart_container(self) -> None:
         """Restart the Docker container and reconnect ADB."""
@@ -261,8 +326,8 @@ class HillClimbEnv(gym.Env):
         reward = 0.0
 
         # Crash penalty
-        if curr.game_state == GameState.DRIVER_DOWN:
-            return -10.0
+        if curr.game_state in (GameState.DRIVER_DOWN, GameState.TOUCH_TO_CONTINUE):
+            return -5.0
 
         if curr.game_state != GameState.RACING:
             return 0.0
@@ -270,22 +335,24 @@ class HillClimbEnv(gym.Env):
         # === Primary: distance gained (via OCR) ===
         if prev is not None and prev.distance_m > 0 and curr.distance_m > prev.distance_m:
             delta = curr.distance_m - prev.distance_m
-            reward += 0.1 * delta
-        else:
-            # Fallback: speed as proxy when OCR not available
-            reward += 1.0 * curr.speed_estimate
+            if delta < 100:  # filter OCR glitches
+                reward += 1.0 * delta
 
-        # === Bonus for forward movement ===
-        if curr.speed_estimate > 0.1:
+        # === Speed bonus ===
+        reward += 0.1 * curr.rpm
+
+        # === Fuel pickup bonus ===
+        if prev is not None and curr.fuel > prev.fuel + 0.02:
             reward += 0.5
 
-        # === Tilt-based balance rewards (key for HCR2) ===
-        relative_tilt = abs(curr.tilt - curr.terrain_slope)
-        if relative_tilt < 15:
-            reward += 0.3    # stable — parallel to ground
-        elif relative_tilt > 30:
-            reward -= 0.5    # danger zone — about to flip
-        if relative_tilt > 60:
-            reward -= 1.0    # critical — almost crashed
+        # === Low fuel penalty ===
+        if curr.fuel < 0.2:
+            reward -= 0.05 * (0.2 - curr.fuel) / 0.2
+
+        # === Stall penalty (no distance gain while racing) ===
+        if prev is not None and prev.game_state == GameState.RACING:
+            delta = curr.distance_m - prev.distance_m
+            if abs(delta) < 0.5:
+                reward -= 0.1
 
         return reward

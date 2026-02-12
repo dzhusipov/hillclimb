@@ -26,7 +26,7 @@ class GameLoop:
         adb_serial: str = "localhost:5555",
         headless: bool = False,
     ) -> None:
-        self._capture = ScreenCapture(adb_serial=adb_serial)
+        self._capture = ScreenCapture(adb_serial=adb_serial, backend=cfg.capture_backend)
         self._vision = VisionAnalyzer()
         self._controller = ADBController(
             adb_serial=adb_serial,
@@ -137,7 +137,7 @@ class GameLoop:
                 continue
 
             # Agent decision
-            action = self._agent.decide(state)
+            action = self._agent.decide(state, frame=frame)
 
             # Execute
             self._controller.execute(action)
@@ -180,7 +180,7 @@ class GameLoop:
         print(f"  [WATCHDOG] Container restarted, waiting for boot...")
         time.sleep(15)
         # Reconnect ADB and all components
-        self._capture = ScreenCapture(adb_serial=self._serial)
+        self._capture = ScreenCapture(adb_serial=self._serial, backend=cfg.capture_backend)
         self._controller = ADBController(
             adb_serial=self._serial,
             gas_x=cfg.gas_button.x,

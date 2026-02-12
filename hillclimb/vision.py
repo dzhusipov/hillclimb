@@ -154,6 +154,25 @@ def _classify_digit(
     return _classify_digit_heuristic(holes, fill)
 
 
+def extract_game_field(frame: np.ndarray) -> np.ndarray:
+    """Crop game field (excluding HUD), convert to grayscale 84x84.
+
+    Returns:
+        np.ndarray of shape (84, 84, 1), dtype uint8.
+    """
+    roi = cfg.game_field_roi
+    size = cfg.game_field_size
+    h, w = frame.shape[:2]
+    y1 = max(0, roi.y)
+    y2 = min(h, roi.y + roi.h)
+    x1 = max(0, roi.x)
+    x2 = min(w, roi.x + roi.w)
+    crop = frame[y1:y2, x1:x2]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    resized = cv2.resize(gray, (size, size), interpolation=cv2.INTER_AREA)
+    return resized[:, :, np.newaxis]
+
+
 class VisionAnalyzer:
     """Processes a single BGR frame and returns a VisionState."""
 

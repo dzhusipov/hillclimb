@@ -7,6 +7,7 @@ device via adbutils.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from enum import IntEnum
 
@@ -49,6 +50,7 @@ class ADBController:
         self._brake_y = brake_y
         self._action_hold_ms = action_hold_ms
         self._device = None
+        self._action_thread: threading.Thread | None = None
         self._connect()
 
     def _connect(self) -> None:
@@ -83,6 +85,36 @@ class ADBController:
             self._hold(self._gas_x, self._gas_y, duration_ms)
         elif action == Action.BRAKE:
             self._hold(self._brake_x, self._brake_y, duration_ms)
+
+    def execute_async(self, action: Action | int, duration_ms: int | None = None) -> None:
+        """Fire action in a background thread. Returns immediately.
+
+        The ADB swipe command runs in a daemon thread so the caller can
+        proceed (e.g. start a screencap) without waiting for the hold
+        duration to elapse.
+        """
+        action = Action(action)
+        duration_ms = duration_ms or self._action_hold_ms
+
+        if action == Action.NOTHING:
+            return
+
+        if action == Action.GAS:
+            x, y = self._gas_x, self._gas_y
+        else:
+            x, y = self._brake_x, self._brake_y
+
+        cmd = f"input swipe {x} {y} {x} {y} {duration_ms}"
+        self._action_thread = threading.Thread(
+            target=self._shell_retry, args=(cmd,), daemon=True,
+        )
+        self._action_thread.start()
+
+    def wait_action(self, timeout: float = 2.0) -> None:
+        """Block until the pending async action completes."""
+        if self._action_thread is not None and self._action_thread.is_alive():
+            self._action_thread.join(timeout=timeout)
+        self._action_thread = None
 
     def tap(self, x: int, y: int) -> None:
         """Single tap at (x, y)."""

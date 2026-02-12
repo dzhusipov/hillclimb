@@ -50,7 +50,7 @@ class Config:
     adb_serial: str = "localhost:5555"
 
     # -- Capture --------------------------------------------------------------
-    capture_backend: str = "png"  # "png" or "raw"
+    capture_backend: str = "raw"  # "raw" (faster, no PNG overhead) or "png"
 
     # -- Emulators (for parallel training) ------------------------------------
     num_emulators: int = 8
@@ -128,7 +128,13 @@ class Config:
 
     # -- Game loop timing ----------------------------------------------------
     loop_interval_sec: float = 0.1  # target 10 decisions/sec
-    action_hold_ms: int = 100       # ADB swipe hold duration
+    action_hold_ms: int = 200       # ADB swipe hold duration
+
+    # -- CNN observation (game field crop → grayscale 84x84) ----------------
+    game_field_roi: Rect = field(default_factory=lambda: Rect(x=0, y=30, w=800, h=310))
+    game_field_size: int = 84
+    n_stack: int = 4
+    max_episode_steps: int = 3000
 
     # -- Logging --------------------------------------------------------------
     log_dir: str = "logs"
@@ -140,6 +146,13 @@ class Config:
     batch_size: int = 256
     n_steps: int = 128
     total_timesteps: int = 10_000_000
+    n_epochs: int = 4
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    clip_range: float = 0.1
+    ent_coef: float = 0.01
+    vf_coef: float = 0.5
+    max_grad_norm: float = 0.5
 
     # -- Template paths -------------------------------------------------------
     template_dir: str = str(Path(__file__).resolve().parent.parent / "templates")

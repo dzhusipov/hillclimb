@@ -17,7 +17,7 @@ class RuleBasedAgent:
     - Default: gas (keep moving forward)
     """
 
-    def decide(self, state: VisionState) -> Action:
+    def decide(self, state: VisionState, **kwargs) -> Action:
         if state.game_state != GameState.RACING:
             return Action.NOTHING
 

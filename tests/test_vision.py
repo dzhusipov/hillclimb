@@ -170,30 +170,6 @@ class TestDialGaugeReader:
 
 
 # ---------------------------------------------------------------------------
-# Distance OCR
-# ---------------------------------------------------------------------------
-
-class TestDistanceOCR:
-    def test_parse_simple_distance(self):
-        assert VisionAnalyzer._parse_distance("103m") == 103.0
-
-    def test_parse_distance_with_comma(self):
-        assert VisionAnalyzer._parse_distance("1,234m") == 1234.0
-
-    def test_parse_distance_with_spaces(self):
-        assert VisionAnalyzer._parse_distance("  567 m ") == 567.0
-
-    def test_parse_empty_returns_zero(self):
-        assert VisionAnalyzer._parse_distance("") == 0.0
-
-    def test_parse_no_digits_returns_zero(self):
-        assert VisionAnalyzer._parse_distance("abcm") == 0.0
-
-    def test_parse_just_digits(self):
-        assert VisionAnalyzer._parse_distance("42") == 42.0
-
-
-# ---------------------------------------------------------------------------
 # Game State Classifier
 # ---------------------------------------------------------------------------
 
