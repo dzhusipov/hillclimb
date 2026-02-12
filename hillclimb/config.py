@@ -50,7 +50,13 @@ class Config:
     adb_serial: str = "localhost:5555"
 
     # -- Capture --------------------------------------------------------------
-    capture_backend: str = "raw"  # "raw" (faster, no PNG overhead) or "png"
+    capture_backend: str = "raw"  # "raw", "png", or "scrcpy"
+
+    # -- scrcpy streaming (used when capture_backend="scrcpy") ----------------
+    scrcpy_max_fps: int = 15
+    scrcpy_max_size: int = 800
+    scrcpy_bitrate: int = 2_000_000
+    scrcpy_server_jar: str = "vendor/scrcpy-server.jar"
 
     # -- Emulators (for parallel training) ------------------------------------
     num_emulators: int = 8

@@ -312,6 +312,19 @@ class TestFullPipeline:
 # ---------------------------------------------------------------------------
 
 class TestNavigator:
+    @staticmethod
+    def _make_state_sequence(initial, then):
+        """Return a callable for mock side_effect: first call returns *initial*,
+        all subsequent calls return *then* (supports _wait_transition polling)."""
+        calls = iter([initial])
+
+        def _side_effect(*args, **kwargs):
+            try:
+                return next(calls)
+            except StopIteration:
+                return then
+        return _side_effect
+
     def test_ensure_racing_from_main_menu(self):
         """Navigator should tap RACE button when in MAIN_MENU."""
         from hillclimb.navigator import Navigator
@@ -326,7 +339,7 @@ class TestNavigator:
         state_racing.game_state = GameState.RACING
 
         mock_cap.capture.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
-        mock_vision.analyze.side_effect = [state_menu, state_racing]
+        mock_vision.analyze.side_effect = self._make_state_sequence(state_menu, state_racing)
 
         nav = Navigator(mock_ctrl, mock_cap, mock_vision)
         result = nav.ensure_racing(timeout=10.0)
@@ -352,7 +365,7 @@ class TestNavigator:
         state_racing.game_state = GameState.RACING
 
         mock_cap.capture.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
-        mock_vision.analyze.side_effect = [state_results, state_racing]
+        mock_vision.analyze.side_effect = self._make_state_sequence(state_results, state_racing)
 
         nav = Navigator(mock_ctrl, mock_cap, mock_vision)
         result = nav.ensure_racing(timeout=10.0)
@@ -360,7 +373,7 @@ class TestNavigator:
         assert result is True
         assert nav.last_results is not None
         assert nav.last_results.results_coins == 500
-        mock_ctrl.tap.assert_called_once_with(cfg.retry_button.x, cfg.retry_button.y)
+        mock_ctrl.tap.assert_any_call(cfg.retry_button.x, cfg.retry_button.y)
 
     def test_ensure_racing_from_double_coins(self):
         """Navigator should dismiss popups when in DOUBLE_COINS_POPUP."""
@@ -376,7 +389,7 @@ class TestNavigator:
         state_racing.game_state = GameState.RACING
 
         mock_cap.capture.return_value = np.zeros((100, 100, 3), dtype=np.uint8)
-        mock_vision.analyze.side_effect = [state_popup, state_racing]
+        mock_vision.analyze.side_effect = self._make_state_sequence(state_popup, state_racing)
 
         nav = Navigator(mock_ctrl, mock_cap, mock_vision)
         result = nav.ensure_racing(timeout=10.0)

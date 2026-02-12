@@ -9,7 +9,7 @@ import sys
 import time
 
 from hillclimb.agent_rules import RuleBasedAgent
-from hillclimb.capture import ScreenCapture
+from hillclimb.capture import ScreenCapture, create_capture
 from hillclimb.config import cfg
 from hillclimb.controller import ADBController, Action
 from hillclimb.logger import Logger
@@ -26,7 +26,14 @@ class GameLoop:
         adb_serial: str = "localhost:5555",
         headless: bool = False,
     ) -> None:
-        self._capture = ScreenCapture(adb_serial=adb_serial, backend=cfg.capture_backend)
+        self._capture = create_capture(
+            adb_serial=adb_serial,
+            backend=cfg.capture_backend,
+            max_fps=cfg.scrcpy_max_fps,
+            max_size=cfg.scrcpy_max_size,
+            bitrate=cfg.scrcpy_bitrate,
+            server_jar=cfg.scrcpy_server_jar,
+        )
         self._vision = VisionAnalyzer()
         self._controller = ADBController(
             adb_serial=adb_serial,
@@ -180,7 +187,14 @@ class GameLoop:
         print(f"  [WATCHDOG] Container restarted, waiting for boot...")
         time.sleep(15)
         # Reconnect ADB and all components
-        self._capture = ScreenCapture(adb_serial=self._serial, backend=cfg.capture_backend)
+        self._capture = create_capture(
+            adb_serial=self._serial,
+            backend=cfg.capture_backend,
+            max_fps=cfg.scrcpy_max_fps,
+            max_size=cfg.scrcpy_max_size,
+            bitrate=cfg.scrcpy_bitrate,
+            server_jar=cfg.scrcpy_server_jar,
+        )
         self._controller = ADBController(
             adb_serial=self._serial,
             gas_x=cfg.gas_button.x,

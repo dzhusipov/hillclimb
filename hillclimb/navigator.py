@@ -40,6 +40,27 @@ class Navigator:
         self._racing_stuck_count = 0
         self._captcha_relaunch_count = 0
 
+    def _wait_transition(
+        self,
+        from_state: GameState,
+        timeout: float = 3.0,
+        min_wait: float = 0.2,
+    ) -> GameState:
+        """Poll until state changes from *from_state*.
+
+        Waits *min_wait* first (for UI to react), then polls every
+        ~150 ms.  Returns the new state or *from_state* on timeout.
+        """
+        time.sleep(min_wait)
+        deadline = time.time() + timeout - min_wait
+        while time.time() < deadline:
+            frame = self._cap.capture()
+            state = self._vision.analyze(frame)
+            if state.game_state != from_state:
+                return state.game_state
+            time.sleep(0.15)
+        return from_state
+
     def _save_debug_frame(self, frame: np.ndarray, label: str) -> None:
         """Save a debug frame to logs/nav_debug/ for later analysis."""
         import cv2
@@ -92,7 +113,7 @@ class Navigator:
                 print(f"  [NAV] STUCK on {gs.name} for {self._same_state_count} cycles — fallback tap center")
                 self._save_debug_frame(frame, f"stuck_{gs.name}")
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                time.sleep(1.0)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.3)
                 self._same_state_count = 0
                 continue
 
@@ -118,53 +139,49 @@ class Navigator:
             if gs == GameState.MAIN_MENU:
                 print(f"  [NAV] → tap RACE button ({cfg.race_button.x}, {cfg.race_button.y})")
                 self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
-                time.sleep(2.0)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.VEHICLE_SELECT:
                 print(f"  [NAV] → tap START ({cfg.start_button.x}, {cfg.start_button.y})")
                 self._ctrl.tap(cfg.start_button.x, cfg.start_button.y)
-                time.sleep(2.0)
-                self._dismiss_popups()
-                time.sleep(1.5)
+                self._wait_transition(gs, timeout=4.0, min_wait=0.5)
 
             elif gs == GameState.DOUBLE_COINS_POPUP:
                 print(f"  [NAV] → dismiss DOUBLE_COINS popup")
                 self._dismiss_popups()
-                time.sleep(2.0)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.3)
 
             elif gs == GameState.DRIVER_DOWN:
                 print(f"  [NAV] → DRIVER_DOWN — BACK to skip second chance")
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                time.sleep(0.3)
-                # BACK скипает экран "second chance" (машина висит в воздухе)
+                time.sleep(0.2)
                 self._ctrl.keyevent("KEYCODE_BACK")
-                time.sleep(0.5)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.2)
 
             elif gs == GameState.TOUCH_TO_CONTINUE:
                 print(f"  [NAV] → tap center (TOUCH_TO_CONTINUE)")
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                time.sleep(1.5)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.3)
 
             elif gs == GameState.RESULTS:
                 self._last_results = state
                 print(f"  [NAV] → tap RETRY ({cfg.retry_button.x}, {cfg.retry_button.y})")
                 self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
-                time.sleep(2.0)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.CAPTCHA:
                 print(f"  [NAV] → solving CAPTCHA...")
                 self._save_debug_frame(frame, "captcha")
                 self._solve_captcha(frame)
-                time.sleep(2.0)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.UNKNOWN:
                 print(f"  [NAV] → UNKNOWN state — BACK + tap center")
                 self._save_debug_frame(frame, "unknown")
-                # BACK может скипнуть second chance или другой попап
                 self._ctrl.keyevent("KEYCODE_BACK")
-                time.sleep(0.5)
+                time.sleep(0.3)
                 self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                time.sleep(0.5)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.2)
 
         return False
 
@@ -172,17 +189,17 @@ class Navigator:
         """Force-stop and relaunch HCR2."""
         print("  [NAV] Relaunching HCR2...")
         self._ctrl.shell("am force-stop com.fingersoft.hcr2")
-        time.sleep(1.0)
+        time.sleep(0.5)
         self._ctrl.shell("am start -n com.fingersoft.hcr2/.AppActivity")
-        time.sleep(5.0)
+        time.sleep(4.0)
         # Dismiss "Viewing full screen" + OFFLINE popup by tapping GOT IT then ADVENTURE tab
         self._ctrl.tap(500, 202)
         time.sleep(0.3)
         self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-        time.sleep(3.0)
+        time.sleep(1.5)
         # OFFLINE popup may appear after a delay — tap ADVENTURE again
         self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-        time.sleep(1.0)
+        time.sleep(0.5)
 
     def _solve_captcha(self, frame: np.ndarray) -> None:
         """Обойти CAPTCHA ('ARE YOU A ROBOT?') или OFFLINE popup.
@@ -201,7 +218,7 @@ class Navigator:
         # Step 1: BACK
         print("  [CAPTCHA] Pressing BACK...")
         self._ctrl.keyevent("KEYCODE_BACK")
-        time.sleep(0.5)
+        time.sleep(0.3)
         frame2 = self._cap.capture()
         state = self._vision.analyze(frame2)
         if state.game_state != GameState.CAPTCHA:
@@ -212,7 +229,7 @@ class Navigator:
         # Step 2: tap ADVENTURE tab (dismisses OFFLINE popup)
         print("  [CAPTCHA] Trying ADVENTURE tap...")
         self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-        time.sleep(1.5)
+        time.sleep(0.8)
         frame3 = self._cap.capture()
         state = self._vision.analyze(frame3)
         if state.game_state != GameState.CAPTCHA:
@@ -224,7 +241,7 @@ class Navigator:
         self._captcha_relaunch_count += 1
         print(f"  [CAPTCHA] Real CAPTCHA — HOME + relaunch (attempt {self._captcha_relaunch_count})")
         self._ctrl.keyevent("KEYCODE_HOME")
-        time.sleep(2.0)
+        time.sleep(1.0)
         self._relaunch_game()
         print("  [CAPTCHA] Game relaunched")
 
@@ -240,10 +257,10 @@ class Navigator:
         """Закрыть попапы SKIP в обеих известных позициях."""
         # DOUBLE COINS — синяя SKIP (центр попапа)
         self._ctrl.tap(967, 869)
-        time.sleep(0.3)
+        time.sleep(0.15)
         # Резерв: жёлтый SKIP (cfg) + вторая позиция
         self._ctrl.tap(cfg.skip_button.x, cfg.skip_button.y)
-        time.sleep(0.3)
+        time.sleep(0.15)
         self._ctrl.tap(990, 830)
 
     def restart_game(self, timeout: float = 20.0) -> bool:

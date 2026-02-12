@@ -10,7 +10,7 @@ import time
 
 sys.path.insert(0, ".")
 
-from hillclimb.capture import ScreenCapture
+from hillclimb.capture import create_capture
 from hillclimb.config import cfg
 from hillclimb.controller import ADBConnectionError, ADBController, Action
 from hillclimb.navigator import Navigator
@@ -21,13 +21,36 @@ NUM_EPISODES = 5
 
 
 def main():
-    print(f"capture_backend={cfg.capture_backend}, action_hold_ms={cfg.action_hold_ms}")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Profile game step timing")
+    parser.add_argument(
+        "--backend", default=cfg.capture_backend,
+        choices=["raw", "png", "scrcpy"],
+        help=f"Capture backend (default: {cfg.capture_backend})",
+    )
+    parser.add_argument("--serial", default=SERIAL, help="ADB serial")
+    parser.add_argument("--episodes", type=int, default=NUM_EPISODES)
+    args = parser.parse_args()
+
+    backend = args.backend
+    serial = args.serial
+    num_episodes = args.episodes
+
+    print(f"capture_backend={backend}, action_hold_ms={cfg.action_hold_ms}")
     print()
 
-    capture = ScreenCapture(adb_serial=SERIAL, backend=cfg.capture_backend)
+    capture = create_capture(
+        adb_serial=serial,
+        backend=backend,
+        max_fps=cfg.scrcpy_max_fps,
+        max_size=cfg.scrcpy_max_size,
+        bitrate=cfg.scrcpy_bitrate,
+        server_jar=cfg.scrcpy_server_jar,
+    )
     vision = VisionAnalyzer()
     controller = ADBController(
-        adb_serial=SERIAL,
+        adb_serial=serial,
         gas_x=cfg.gas_button.x,
         gas_y=cfg.gas_button.y,
         brake_x=cfg.brake_button.x,
@@ -44,9 +67,9 @@ def main():
     all_step_total = []
     all_reset = []
 
-    for ep in range(1, NUM_EPISODES + 1):
+    for ep in range(1, num_episodes + 1):
         print(f"\n{'='*70}")
-        print(f"EPISODE {ep}/{NUM_EPISODES}")
+        print(f"EPISODE {ep}/{num_episodes}")
         print(f"{'='*70}")
 
         # --- RESET ---
@@ -175,7 +198,7 @@ def main():
 
     # --- GLOBAL SUMMARY ---
     print(f"\n{'='*70}")
-    print(f"GLOBAL SUMMARY ({NUM_EPISODES} episodes, {len(all_step_total)} total steps)")
+    print(f"GLOBAL SUMMARY ({num_episodes} episodes, {len(all_step_total)} total steps)")
     print(f"{'='*70}")
     print(f"  resets:       avg={statistics.mean(all_reset):.1f}s  "
           f"min={min(all_reset):.1f}s  max={max(all_reset):.1f}s")

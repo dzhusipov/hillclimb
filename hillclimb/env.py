@@ -9,7 +9,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from hillclimb.capture import ScreenCapture
+from hillclimb.capture import ScreenCapture, create_capture
 from hillclimb.config import cfg
 from hillclimb.controller import ADBConnectionError, ADBController, Action
 from hillclimb.navigator import Navigator
@@ -58,7 +58,14 @@ class HillClimbEnv(gym.Env):
         self.render_mode = render_mode
 
         self._serial = adb_serial
-        self._capture = ScreenCapture(adb_serial=adb_serial, backend=cfg.capture_backend)
+        self._capture = create_capture(
+            adb_serial=adb_serial,
+            backend=cfg.capture_backend,
+            max_fps=cfg.scrcpy_max_fps,
+            max_size=cfg.scrcpy_max_size,
+            bitrate=cfg.scrcpy_bitrate,
+            server_jar=cfg.scrcpy_server_jar,
+        )
         self._vision = VisionAnalyzer()
         self._controller = ADBController(
             adb_serial=adb_serial,
@@ -289,7 +296,14 @@ class HillClimbEnv(gym.Env):
         print(f"[ENV {self._serial}] Container restarted, waiting for boot...")
         time.sleep(15)
         # Reconnect
-        self._capture = ScreenCapture(adb_serial=self._serial)
+        self._capture = create_capture(
+            adb_serial=self._serial,
+            backend=cfg.capture_backend,
+            max_fps=cfg.scrcpy_max_fps,
+            max_size=cfg.scrcpy_max_size,
+            bitrate=cfg.scrcpy_bitrate,
+            server_jar=cfg.scrcpy_server_jar,
+        )
         self._controller = ADBController(
             adb_serial=self._serial,
             gas_x=cfg.gas_button.x,

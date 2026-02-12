@@ -1,4 +1,8 @@
-"""MJPEG streaming from emulators via ADB screencap."""
+"""Emulator stream manager: scrcpy H.264 → JPEG frames for dashboard.
+
+Uses ScrcpyCapture for near-instant frame grabs (~0 ms).
+Falls back to ADB screencap if scrcpy fails to start.
+"""
 
 import subprocess
 import threading
@@ -12,9 +16,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Capture settings
-CAPTURE_INTERVAL = 0.5  # seconds between frames
-JPEG_QUALITY = 60
-OFFLINE_FRAME_INTERVAL = 3.0  # slower polling when emulator is offline
+JPEG_QUALITY = 65
+SCRCPY_FPS = 30
+SCRCPY_INTERVAL = 1.0 / SCRCPY_FPS       # ~33 ms between JPEG encodes
+SCREENCAP_INTERVAL = 0.5                   # fallback: 2 FPS
+OFFLINE_RETRY_INTERVAL = 3.0
 
 
 class EmulatorStream:
@@ -29,9 +35,10 @@ class EmulatorStream:
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._scrcpy = None
         self._connected = False
         self._rotated = False
-        self._capture_size: tuple[int, int] = (0, 0)  # (w, h) of raw capture
+        self._capture_size: tuple[int, int] = (0, 0)
 
     @property
     def frame(self) -> Optional[bytes]:
@@ -51,24 +58,97 @@ class EmulatorStream:
             return
         self._running = True
         self._thread = threading.Thread(
-            target=self._capture_loop, daemon=True, name=f"stream-{self.name}"
+            target=self._stream_loop, daemon=True, name=f"stream-{self.name}",
         )
         self._thread.start()
         logger.info("Started stream for %s", self.name)
 
     def stop(self) -> None:
         self._running = False
+        if self._scrcpy:
+            try:
+                self._scrcpy.close()
+            except Exception:
+                pass
+            self._scrcpy = None
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
         logger.info("Stopped stream for %s", self.name)
 
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
+
+    def _stream_loop(self) -> None:
+        """Background loop: grab frames, JPEG-encode, store."""
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
+
+        # Try scrcpy first
+        self._try_init_scrcpy()
+
+        while self._running:
+            try:
+                img = self._grab_frame()
+                if img is None:
+                    time.sleep(OFFLINE_RETRY_INTERVAL)
+                    continue
+
+                # JPEG encode
+                _, jpeg = cv2.imencode(".jpg", img, encode_params)
+                with self._lock:
+                    self._frame = jpeg.tobytes()
+
+                interval = SCRCPY_INTERVAL if self._scrcpy else SCREENCAP_INTERVAL
+                time.sleep(interval)
+
+            except Exception as e:
+                logger.debug("Stream error for %s: %s", self.name, e)
+                # If scrcpy died, fall back to screencap
+                if self._scrcpy:
+                    try:
+                        self._scrcpy.close()
+                    except Exception:
+                        pass
+                    self._scrcpy = None
+                time.sleep(OFFLINE_RETRY_INTERVAL)
+
+    def _try_init_scrcpy(self) -> None:
+        """Attempt to start ScrcpyCapture for this emulator."""
+        try:
+            from hillclimb.scrcpy_capture import ScrcpyCapture
+            self._scrcpy = ScrcpyCapture(
+                adb_serial=self.adb_host,
+                max_fps=SCRCPY_FPS,
+                max_size=800,
+                bitrate=2_000_000,
+            )
+            # ScrcpyCapture already rotates portrait → landscape
+            self._rotated = True          # raw capture was portrait
+            self._capture_size = (480, 800)  # raw (pre-rotation) size
+            logger.info("ScrcpyCapture active for %s", self.name)
+        except Exception as e:
+            logger.warning("ScrcpyCapture failed for %s: %s — using screencap",
+                           self.name, e)
+            self._scrcpy = None
+
+    def _grab_frame(self) -> Optional[np.ndarray]:
+        """Get a BGR numpy frame from scrcpy or screencap fallback."""
+        if self._scrcpy:
+            return self._scrcpy.capture()
+
+        # Screencap fallback
+        return self._screencap_frame()
+
+    # ------------------------------------------------------------------
+    # Screencap fallback
+    # ------------------------------------------------------------------
+
     def _ensure_connected(self) -> bool:
-        """Connect ADB to emulator."""
         try:
             result = subprocess.run(
                 ["adb", "connect", self.adb_host],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=5,
             )
             self._connected = "connected" in result.stdout.lower()
             return self._connected
@@ -76,23 +156,26 @@ class EmulatorStream:
             self._connected = False
             return False
 
-    def _capture_frame(self) -> Optional[bytes]:
-        """Capture a single frame via ADB screencap and encode as JPEG."""
+    def _screencap_frame(self) -> Optional[np.ndarray]:
+        """Capture via ADB screencap -p (PNG). Slow fallback."""
+        if not self._connected:
+            self._ensure_connected()
+            if not self._connected:
+                return None
         try:
             result = subprocess.run(
                 ["adb", "-s", self.adb_host, "exec-out", "screencap", "-p"],
-                capture_output=True, timeout=10
+                capture_output=True, timeout=10,
             )
             if result.returncode != 0 or not result.stdout:
+                self._connected = False
                 return None
 
-            # Decode PNG from ADB
             img_array = np.frombuffer(result.stdout, dtype=np.uint8)
             img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
             if img is None:
                 return None
 
-            # Track raw capture size and rotate portrait to landscape
             h, w = img.shape[:2]
             self._capture_size = (w, h)
             if h > w:
@@ -100,33 +183,11 @@ class EmulatorStream:
                 img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
             else:
                 self._rotated = False
-
-            # Encode as JPEG
-            encode_params = [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY]
-            _, jpeg = cv2.imencode(".jpg", img, encode_params)
-            return jpeg.tobytes()
+            return img
         except (subprocess.TimeoutExpired, Exception) as e:
-            logger.debug("Capture failed for %s: %s", self.name, e)
+            logger.debug("Screencap failed for %s: %s", self.name, e)
+            self._connected = False
             return None
-
-    def _capture_loop(self) -> None:
-        """Background capture loop."""
-        while self._running:
-            if not self._connected:
-                self._ensure_connected()
-                if not self._connected:
-                    time.sleep(OFFLINE_FRAME_INTERVAL)
-                    continue
-
-            frame = self._capture_frame()
-            if frame:
-                with self._lock:
-                    self._frame = frame
-                time.sleep(CAPTURE_INTERVAL)
-            else:
-                # Lost connection — retry slower
-                self._connected = False
-                time.sleep(OFFLINE_FRAME_INTERVAL)
 
 
 class StreamManager:
@@ -145,7 +206,6 @@ class StreamManager:
             return self._streams[emu_id]
 
     def start_streams(self, emu_ids: list[int]) -> None:
-        """Start streams for the given emulator IDs."""
         for emu_id in emu_ids:
             self.get_or_create(emu_id)
 
@@ -166,4 +226,4 @@ class StreamManager:
         stream = self._streams.get(emu_id)
         if stream and stream.capture_size != (0, 0):
             return stream.rotated, stream.capture_size
-        return True, (480, 800)  # default: portrait, needs rotation
+        return True, (480, 800)

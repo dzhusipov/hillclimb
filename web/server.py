@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -97,6 +97,23 @@ async def snapshot(emu_id: int):
         return Response(content=frame, media_type="image/jpeg",
                         headers={"Cache-Control": "no-cache"})
     return Response(status_code=204)
+
+
+@app.websocket("/ws/stream/{emu_id}")
+async def ws_stream(websocket: WebSocket, emu_id: int):
+    """WebSocket: push JPEG frames at ~30 FPS."""
+    await websocket.accept()
+    stream_manager.get_or_create(emu_id)
+    prev_frame = None
+    try:
+        while True:
+            frame = stream_manager.get_frame(emu_id)
+            if frame is not None and frame is not prev_frame:
+                await websocket.send_bytes(frame)
+                prev_frame = frame
+            await asyncio.sleep(1 / 30)
+    except (WebSocketDisconnect, Exception):
+        pass
 
 
 @app.get("/api/status")

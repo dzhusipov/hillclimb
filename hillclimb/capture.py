@@ -109,6 +109,39 @@ class ScreenCapture:
         self._device = None
 
 
+# ------------------------------------------------------------------
+# Factory
+# ------------------------------------------------------------------
+
+def create_capture(
+    adb_serial: str = "localhost:5555",
+    backend: str = "raw",
+    **kwargs,
+):
+    """Create a capture instance for the given backend.
+
+    Args:
+        adb_serial: ADB device serial.
+        backend: ``"raw"``, ``"png"``, or ``"scrcpy"``.
+        **kwargs: Extra arguments forwarded to the backend constructor.
+
+    Returns:
+        An object with ``.capture()`` / ``.grab()`` / ``.close()`` API.
+    """
+    if backend == "scrcpy":
+        try:
+            from hillclimb.scrcpy_capture import ScrcpyCapture
+
+            return ScrcpyCapture(adb_serial=adb_serial, **kwargs)
+        except Exception as e:
+            logger.warning(
+                "scrcpy capture failed on %s: %s — falling back to raw",
+                adb_serial, e,
+            )
+            return ScreenCapture(adb_serial=adb_serial, backend="raw")
+    return ScreenCapture(adb_serial=adb_serial, backend=backend)
+
+
 def main() -> None:
     """Smoke test: capture and save a frame from the first emulator."""
     import argparse
@@ -118,14 +151,14 @@ def main() -> None:
         "--serial", default="localhost:5555", help="ADB serial"
     )
     parser.add_argument(
-        "--backend", default="png", choices=["png", "raw"],
+        "--backend", default="png", choices=["png", "raw", "scrcpy"],
     )
     parser.add_argument("--benchmark", type=int, default=0, help="Run N captures")
     args = parser.parse_args()
 
-    cap = ScreenCapture(adb_serial=args.serial, backend=args.backend)
+    cap = create_capture(adb_serial=args.serial, backend=args.backend)
     frame = cap.capture()
-    print(f"Captured: {frame.shape} from {args.serial}")
+    print(f"Captured: {frame.shape} from {args.serial} (backend={args.backend})")
     cv2.imwrite("capture_test.png", frame)
     print("Saved to capture_test.png")
 

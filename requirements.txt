@@ -13,3 +13,5 @@ adbutils
 jinja2
 python-multipart
 pydantic
+av>=12.0
+av>=12.0

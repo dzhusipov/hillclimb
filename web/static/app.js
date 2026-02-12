@@ -143,15 +143,44 @@ function setupTouchHandlers() {
     });
 }
 
-// --- Snapshot polling (avoids browser 6-connection limit for MJPEG) ---
+// --- WebSocket streaming (scrcpy → JPEG push, ~30 FPS) ---
 
-const SNAPSHOT_INTERVAL = 800;  // ms between snapshot refreshes
+function startWebSocketStream(img, emuId) {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${location.host}/ws/stream/${emuId}`;
+    const ws = new WebSocket(url);
+    ws.binaryType = 'blob';
+
+    let prevUrl = null;
+
+    ws.onmessage = (event) => {
+        const blobUrl = URL.createObjectURL(event.data);
+        img.onload = () => {
+            if (prevUrl) URL.revokeObjectURL(prevUrl);
+            prevUrl = blobUrl;
+        };
+        img.src = blobUrl;
+        img.style.display = 'block';
+        const placeholder = img.nextElementSibling;
+        if (placeholder) placeholder.style.display = 'none';
+    };
+
+    ws.onclose = () => {
+        // Reconnect after 2s
+        setTimeout(() => startWebSocketStream(img, emuId), 2000);
+    };
+
+    ws.onerror = () => ws.close();
+}
+
+// --- Snapshot polling (fallback when WebSocket not available) ---
+
+const SNAPSHOT_INTERVAL = 800;
 
 function refreshSnapshots() {
-    document.querySelectorAll('.stream').forEach(img => {
+    document.querySelectorAll('.stream[data-fallback="true"]').forEach(img => {
         const emuId = img.dataset.emuId;
         if (emuId === undefined) return;
-        // Only refresh if previous load finished (avoid piling up requests)
         if (img.dataset.loading === 'true') return;
         img.dataset.loading = 'true';
         const newImg = new Image();
@@ -169,10 +198,18 @@ function refreshSnapshots() {
     });
 }
 
+function initStreams() {
+    document.querySelectorAll('.stream').forEach(img => {
+        const emuId = img.dataset.emuId;
+        if (emuId === undefined) return;
+        startWebSocketStream(img, emuId);
+    });
+}
+
 // --- Init ---
 
 updateStatus();
 setInterval(updateStatus, POLL_INTERVAL);
-refreshSnapshots();
+initStreams();
 setInterval(refreshSnapshots, SNAPSHOT_INTERVAL);
 setupTouchHandlers();
