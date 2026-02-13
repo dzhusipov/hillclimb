@@ -85,6 +85,7 @@ class HillClimbEnv(gym.Env):
         self._navigator = Navigator(
             self._controller, self._capture, self._vision,
             env_index=self._env_index,
+            save_nav_frames=True,
         )
 
         self._prev_state: VisionState | None = None
@@ -180,9 +181,16 @@ class HillClimbEnv(gym.Env):
 
         state = self._vision.analyze(frame)
 
-        # Mid-race popup: CAPTCHA and DOUBLE_COINS can interrupt racing
-        if state.game_state in (GameState.CAPTCHA, GameState.DOUBLE_COINS_POPUP):
-            print(f"  [ENV] Mid-race popup: {state.game_state.name} — navigating back...")
+        # Mid-race interruption: any non-RACING state that isn't a terminal
+        # state means we left the race (OFFLINE popup, CAPTCHA, menu, etc.)
+        _interrupt_states = (
+            GameState.CAPTCHA,
+            GameState.DOUBLE_COINS_POPUP,
+            GameState.MAIN_MENU,
+            GameState.VEHICLE_SELECT,
+        )
+        if state.game_state in _interrupt_states:
+            print(f"  [ENV] Mid-race interrupt: {state.game_state.name} — navigating back...")
             ok = self._navigator.ensure_racing(timeout=30.0)
             if ok:
                 frame = self._capture.capture()
@@ -321,6 +329,7 @@ class HillClimbEnv(gym.Env):
         self._navigator = Navigator(
             self._controller, self._capture, self._vision,
             env_index=self._env_index,
+            save_nav_frames=True,
         )
         self._controller.shell("am start -n com.fingersoft.hcr2/.AppActivity")
         time.sleep(8)

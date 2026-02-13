@@ -141,6 +141,7 @@ def train(
     num_envs: int = 1,
     render: bool = False,
     resume: str | None = None,
+    skip_envs: set[int] | None = None,
 ) -> None:
     """Train a PPO agent with CNN+MLP (MultiInputPolicy)."""
     import torch
@@ -154,6 +155,7 @@ def train(
         VecTransposeImage,
     )
 
+    skip_envs = skip_envs or set()
     total_timesteps = total_timesteps or cfg.total_timesteps
 
     device = "cpu"
@@ -166,8 +168,12 @@ def train(
 
     # Environment(s)
     render_mode = "human" if render else None
-    serials = [cfg.emulator_serial(i) for i in range(num_envs)]
-    print(f"Emulators ({num_envs}): {', '.join(serials)}")
+    serials = [cfg.emulator_serial(i) for i in range(num_envs) if i not in skip_envs]
+    actual_num_envs = len(serials)
+    print(f"Emulators ({actual_num_envs}): {', '.join(serials)}")
+    if skip_envs:
+        print(f"Skipped envs: {sorted(skip_envs)}")
+    num_envs = actual_num_envs
 
     env = SubprocVecEnv([make_env(s, render_mode) for s in serials])
     env = VecMonitor(env)
@@ -262,17 +268,24 @@ def main() -> None:
                         help="Show debug window during training")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to model to resume training from")
+    parser.add_argument("--skip-envs", type=str, default=None,
+                        help="Comma-separated env indices to skip (e.g. '0' or '0,3')")
     args = parser.parse_args()
 
     timesteps = args.timesteps
     if timesteps is None and args.episodes is not None:
         timesteps = args.episodes * 200
 
+    skip = set()
+    if args.skip_envs:
+        skip = {int(x.strip()) for x in args.skip_envs.split(",")}
+
     train(
         total_timesteps=timesteps,
         num_envs=args.num_envs,
         render=args.render,
         resume=args.resume,
+        skip_envs=skip,
     )
 
 

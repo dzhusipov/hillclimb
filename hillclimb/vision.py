@@ -270,6 +270,17 @@ class VisionAnalyzer:
                     if not _is_racing and _tab_bright < 0.03:
                         return GameState.CAPTCHA
 
+        # 0b. OFFLINE popup: dark overlay + tab bar visible + gray dialog.
+        #     Can appear on ANY tab (ADVENTURE, CUPS, etc.).
+        #     overall_v ~55 (darker than menus ~130, lighter than CAPTCHA ~35).
+        #     Tab bar IS visible (unlike CAPTCHA/RACING dark maps).
+        #     Center has dark overlay (>50% pixels with V < 80).
+        if overall_v < 100 and _tab_bright > 0.05:
+            center_zone_v = hsv[int(h * 0.2):int(h * 0.8),
+                                int(w * 0.15):int(w * 0.85), 2]
+            if np.mean(center_zone_v < 80) > 0.5:
+                return GameState.MAIN_MENU
+
         # 1. DRIVER_DOWN: orange star burst in upper-center area
         #    Screen has dark overlay + orange/yellow "DRIVER DOWN" text
         upper_center = hsv[h // 6 : h // 3, w // 3 : 2 * w // 3]
@@ -411,6 +422,18 @@ class VisionAnalyzer:
             bottom_right, start_lower, start_upper) > 0)
         if green_start > 0.05 and green_bl < 0.05:
             return GameState.VEHICLE_SELECT
+
+        # 6b. VEHICLE_SELECT fallback: checkered flag covers START button,
+        #     but BACK button (bottom-left bright) + green upgrade prices visible.
+        #     MAIN_MENU has no BACK button (bl_bright~0.27) and no upgrade cards.
+        bl_zone = hsv[int(h * 0.85):, : w // 4]
+        bl_bright = np.mean(bl_zone[:, :, 2] > 150)
+        if bl_bright > 0.35 and green_bl < 0.05:
+            upper_zone = hsv[int(h * 0.1):int(h * 0.4), int(w * 0.2):int(w * 0.8)]
+            green_upgrades = np.mean(
+                cv2.inRange(upper_zone, green_lower, green_upper) > 0)
+            if green_upgrades > 0.05:
+                return GameState.VEHICLE_SELECT
 
         # 7. MAIN_MENU: яркий центр-низ + НЕТ зелёной START кнопки справа
         bottom_center = hsv[int(h * 0.7) :, w // 3 : 2 * w // 3]

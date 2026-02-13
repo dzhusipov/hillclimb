@@ -35,16 +35,21 @@ class Navigator:
         capture: ScreenCapture,
         vision: VisionAnalyzer,
         env_index: int = 0,
+        save_nav_frames: bool = False,
     ) -> None:
         self._ctrl = controller
         self._cap = capture
         self._vision = vision
         self._env_index = env_index
+        self._save_nav_frames = save_nav_frames
         self._last_results: VisionState | None = None
         self._same_state_count = 0
         self._prev_state: GameState | None = None
         self._racing_stuck_count = 0
         self._captcha_relaunch_count = 0
+        self._nav_frames_dir = Path(cfg.log_dir) / "nav_frames"
+        if self._save_nav_frames:
+            self._nav_frames_dir.mkdir(parents=True, exist_ok=True)
 
     def _log_nav_event(
         self,
@@ -93,13 +98,26 @@ class Navigator:
     def _save_debug_frame(self, frame: np.ndarray, label: str) -> None:
         """Save a debug frame to logs/nav_debug/ for later analysis."""
         import cv2
-        from pathlib import Path
         debug_dir = Path(cfg.log_dir) / "nav_debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
         ts = int(time.time())
         path = debug_dir / f"{ts}_{label}.png"
         cv2.imwrite(str(path), frame)
         print(f"  [NAV] Saved debug frame: {path}")
+
+    def _save_nav_frame(
+        self, frame: np.ndarray, gs: GameState, stuck: int, action: str,
+    ) -> None:
+        """Save every nav frame for full diagnostics (JPEG, ~20-30KB)."""
+        if not self._save_nav_frames:
+            return
+        import cv2
+        ts_ms = int(time.time() * 1000)
+        fname = f"{ts_ms}_e{self._env_index}_{gs.name}_s{stuck}_{action}.jpg"
+        cv2.imwrite(
+            str(self._nav_frames_dir / fname), frame,
+            [cv2.IMWRITE_JPEG_QUALITY, 70],
+        )
 
     @property
     def last_results(self) -> VisionState | None:
@@ -131,6 +149,9 @@ class Navigator:
             elapsed = time.time() - nav_start
 
             print(f"  [NAV] {elapsed:.1f}s | state={gs.name} | stuck={self._same_state_count}")
+
+            # Save frame for diagnostics (before action)
+            self._save_nav_frame(frame, gs, self._same_state_count, "before")
 
             # Stuck detection: same state 3 cycles in a row → fallback tap
             if gs == self._prev_state:
@@ -172,9 +193,17 @@ class Navigator:
                 # ADVENTURE tap — переключает таб + закрывает OFFLINE попап
                 self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
                 time.sleep(0.5)
+                # Скриншот после первого тапа ADVENTURE (OFFLINE закрылся?)
+                if self._save_nav_frames:
+                    f2 = self._cap.capture()
+                    self._save_nav_frame(f2, gs, self._same_state_count, "after_adv1")
                 # Повторный тап — OFFLINE может пережить первый тап
                 self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
                 time.sleep(0.4)
+                # Скриншот после второго тапа ADVENTURE
+                if self._save_nav_frames:
+                    f3 = self._cap.capture()
+                    self._save_nav_frame(f3, gs, self._same_state_count, "after_adv2")
                 print(f"  [NAV] → ADVENTURE + RACE ({cfg.race_button.x}, {cfg.race_button.y})")
                 self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
