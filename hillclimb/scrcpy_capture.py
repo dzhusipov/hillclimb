@@ -115,18 +115,16 @@ class ScrcpyCapture:
         )
 
     def _kill_existing_server(self) -> None:
-        """Kill only our own scrcpy-server (by scid), not other instances.
+        """Kill ALL scrcpy-server processes on the device.
 
-        Avoids killing dashboard's scrcpy servers when training starts.
+        Dashboard no longer uses scrcpy (switched to docker exec screencap),
+        so it's safe to kill all instances — prevents zombie accumulation.
         """
-        if self._scid:
-            try:
-                self._adb_shell(
-                    f"pkill -f 'scid={self._scid}'", timeout=5,
-                )
-            except Exception:
-                pass
-            time.sleep(0.3)
+        try:
+            self._adb_shell("pkill -f scrcpy-server", timeout=5)
+        except Exception:
+            pass
+        time.sleep(0.3)
 
     def _start(self) -> None:
         """Start scrcpy-server, set up tunnel, launch decode thread."""
