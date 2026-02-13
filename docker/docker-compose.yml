@@ -3,12 +3,21 @@ x-redroid-common: &redroid-common
   privileged: true
   mem_limit: ${MEM_LIMIT:-3g}
   cpus: ${CPU_LIMIT:-1.2}
+  pids_limit: 1024
+  oom_score_adj: 500
+  stop_grace_period: 30s
   command:
     - androidboot.redroid_gpu_mode=guest
     - androidboot.redroid_width=${WIDTH:-480}
     - androidboot.redroid_height=${HEIGHT:-800}
     - androidboot.redroid_dpi=${DPI:-160}
-  restart: unless-stopped
+  restart: "no"
+  healthcheck:
+    test: ["CMD-SHELL", "getprop sys.boot_completed 2>/dev/null | grep -q 1"]
+    interval: 10s
+    timeout: 5s
+    retries: 30
+    start_period: 30s
   networks:
     - hcr2-net
 
