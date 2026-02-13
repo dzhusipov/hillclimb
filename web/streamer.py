@@ -20,7 +20,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 JPEG_QUALITY = 65
-CAPTURE_INTERVAL = 0.5   # seconds between emulators
+CAPTURE_INTERVAL = 0.15  # seconds between captures (fast for interactive use)
 CAPTURE_TIMEOUT = 5      # docker exec timeout
 
 

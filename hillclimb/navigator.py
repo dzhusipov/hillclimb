@@ -267,23 +267,23 @@ class Navigator:
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.UNKNOWN:
-                if self._same_state_count == 0:
-                    # 1) Ждём — скорее всего переходная анимация (загрузка уровня)
+                if self._same_state_count <= 1:
+                    # 1-2) Ждём — скорее всего загрузка уровня (3-5с)
                     #    НЕ тапаем ничего, чтобы не вылететь на MAIN_MENU
                     print(f"  [NAV] → UNKNOWN — waiting (transition?)")
-                    time.sleep(0.8)
-                elif self._same_state_count == 1:
-                    # 2) BACK — закрывает PAUSED, Parts/Upgrade, попапы
+                    time.sleep(1.5)
+                elif self._same_state_count == 2:
+                    # 3) BACK — закрывает PAUSED, Parts/Upgrade, попапы
                     print(f"  [NAV] → UNKNOWN — BACK")
                     self._ctrl.keyevent("KEYCODE_BACK")
                     self._wait_transition(gs, timeout=2.0, min_wait=0.5)
-                elif self._same_state_count == 2:
-                    # 3) Тап центр — TOUCH_TO_CONTINUE, RESUME, dismiss
+                elif self._same_state_count == 3:
+                    # 4) Тап центр — TOUCH_TO_CONTINUE, RESUME, dismiss
                     print(f"  [NAV] → UNKNOWN — tap center")
                     self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                     self._wait_transition(gs, timeout=2.0, min_wait=0.3)
-                elif self._same_state_count < 5:
-                    # 4) ADVENTURE — пробивает OFFLINE popup, неправильный таб
+                elif self._same_state_count < 6:
+                    # 5) ADVENTURE — пробивает OFFLINE popup, неправильный таб
                     self._save_debug_frame(frame, "unknown")
                     print(f"  [NAV] → UNKNOWN — ADVENTURE tab")
                     self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
