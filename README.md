@@ -24,7 +24,7 @@ AI-агент, который играет в [Hill Climb Racing 2](https://play
 └──────────────────────────────────────────┘
 ```
 
-Цикл работает на ~2.5 FPS через ADB screencap. 8 параллельных эмуляторов через SubprocVecEnv.
+Захват через scrcpy H.264 stream (~15 FPS, fallback на ADB screencap). 8 параллельных эмуляторов через SubprocVecEnv.
 
 ## Требования
 
@@ -139,7 +139,7 @@ python -m hillclimb.game_loop --agent rules --episodes 5 --headless
 ### Обучение RL-агента (PPO)
 
 ```bash
-# Быстрый тест (100k шагов, ~14 часов на 8 эмуляторах)
+# Быстрый тест (100k шагов)
 python -m hillclimb.train --timesteps 100000 --num-envs 8
 
 # Обучение на ночь (nohup, лог в файл)
@@ -147,6 +147,9 @@ nohup python -u -m hillclimb.train --timesteps 500000 --num-envs 8 > logs/train_
 
 # Продолжить обучение с сохранённой модели
 python -m hillclimb.train --timesteps 500000 --num-envs 8 --resume models/ppo_hillclimb
+
+# Исключить эмулятор(ы) из обучения
+python -m hillclimb.train --timesteps 500000 --num-envs 8 --skip-envs 0
 
 # Мониторинг обучения
 tail -f logs/train_run.log
@@ -232,7 +235,7 @@ Discrete(3): `0=nothing, 1=gas, 2=brake`
 - **Эмуляторы:** ReDroid 14 (Docker), 480x800 portrait / 800x480 landscape
 - **Computer Vision:** OpenCV (HSV-сегментация, dial gauge reader, template matching OCR)
 - **Reinforcement Learning:** Stable-Baselines3 PPO, Gymnasium
-- **Screen Capture:** ADB screencap через adbutils (~2.5 FPS)
+- **Screen Capture:** scrcpy H.264 stream через PyAV (~15 FPS) + ADB screencap fallback
 - **Input:** ADB shell input swipe через adbutils
 - **Hardware Acceleration:** PyTorch CUDA (RTX 3090)
 - **Web Dashboard:** FastAPI + Snapshot Polling (800мс)

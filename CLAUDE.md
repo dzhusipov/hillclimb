@@ -121,6 +121,10 @@ nohup python -u -m hillclimb.train --timesteps 500000 --num-envs 8 > logs/train_
 # Продолжить обучение с чекпоинта
 python -m hillclimb.train --timesteps 500000 --num-envs 8 --resume models/ppo_hillclimb
 
+# Исключить эмулятор из обучения (например, для экспериментов)
+python -m hillclimb.train --timesteps 500000 --num-envs 8 --skip-envs 0
+python -m hillclimb.train --timesteps 500000 --num-envs 8 --skip-envs 0,3
+
 # Мониторинг обучения
 tail -f logs/train_run.log
 grep "^  EP" logs/train_run.log | tail -20
@@ -181,26 +185,50 @@ CAPTCHA → (handle) → continue
 ## Navigator State Machine
 | State | Action | Wait | Expect |
 |-------|--------|------|--------|
-| MAIN_MENU | tap race_button | 2s | VEHICLE_SELECT |
-| VEHICLE_SELECT | tap start_button + dismiss_popups | 3.5s | RACING |
+| MAIN_MENU | 2× ADVENTURE tap + RACE tap | 3s | VEHICLE_SELECT |
+| VEHICLE_SELECT | tap START (730,445); stuck: BACK + swipe right 5× | 4s | RACING |
 | DOUBLE_COINS_POPUP | tap skip_button | 2s | RACING |
-| DRIVER_DOWN | tap center + BACK (skip second chance) | 0.8s | TOUCH_TO_CONTINUE |
-| TOUCH_TO_CONTINUE | tap center_screen | 1.5s | RESULTS |
-| RESULTS | read OCR → tap retry | 2s | VEHICLE_SELECT |
+| DRIVER_DOWN | tap safe area (50,50) — не RESPAWN | 3s | TOUCH_TO_CONTINUE |
+| TOUCH_TO_CONTINUE | tap bottom (400,460) — не центр панели | 3s | RESULTS |
+| RESULTS | wait 1.5s анимация → двойной тап RETRY (87,448) | 4s | VEHICLE_SELECT |
 | CAPTCHA | _solve_captcha (3-step) | varies | any |
-| UNKNOWN | BACK + tap center | 1s | retry |
+| UNKNOWN | wait → BACK → tap center → ADVENTURE → relaunch (escalation) | varies | retry |
 
-Stuck detection: same state 3 cycles → fallback tap center.
+Stuck detection: same state 3 cycles → fallback (RESULTS: tap RETRY, остальные: tap center).
 Portrait frame detection: h > w → not in game → relaunch.
+Mid-race interrupt: CAPTCHA, DOUBLE_COINS, MAIN_MENU, VEHICLE_SELECT → ensure_racing(30s).
 
 ### CAPTCHA / OFFLINE обработка
-Классификатор: `overall_V < 75` + dark top (>70%) + dark edges (>60%) + НЕТ RPM-циферблата.
+**CAPTCHA** ("ARE YOU A ROBOT?"): `overall_V < 50` + dark top (>70%) + dark edges (>60%) + НЕТ RPM-циферблата + tab_bright < 0.03.
+**OFFLINE popup** ("Connection to game server failed!"): early detection в step 0b — `overall_v < 100 + tab_bright > 0.05 + dark_center > 50%` → MAIN_MENU.
+Может появиться на ЛЮБОМ табе (ADVENTURE, CUPS и т.д.).
+
 Обработчик `_solve_captcha` (3 шага, макс 2 перезапуска):
 1. BACK — скипает OFFLINE popup
 2. ADVENTURE tap (155, 25) — закрывает OFFLINE popup
 3. HOME + `_relaunch_game()` — крайняя мера (настоящая CAPTCHA)
 
-`_relaunch_game()`: force-stop → start → 5s → GOT IT (500,202) → 2× ADVENTURE tap.
+`_relaunch_game()`: force-stop → start → 4s → GOT IT (315,180) → DON'T ALLOW (400,320) → 2× ADVENTURE tap.
+
+## Vision Classifier (приоритетный порядок)
+| Step | Проверка | Результат |
+|------|----------|-----------|
+| 0 | overall_V<50 + dark top/edges + NO dial + tab_bright<0.03 | CAPTCHA |
+| 0b | overall_V<100 + tab_bright>0.05 + dark_center>50% | MAIN_MENU (OFFLINE popup) |
+| 1 | orange upper + dark center | DRIVER_DOWN |
+| 1b | red upper + green center RESPAWN | DRIVER_DOWN (OUT OF FUEL) |
+| 1b | red upper + white bottom | TOUCH_TO_CONTINUE |
+| 2 | dark center + white bottom + no orange | TOUCH_TO_CONTINUE (dark overlay) |
+| 2b | gray panel + `green_bl_btn<0.02` + `bl_bright<0.10` | TOUCH_TO_CONTINUE (level summary) |
+| 3 | RPM dial brightness>30 + red needle>2.5% | RACING |
+| 4 | `green_bl_btn>0.06` + `green_br_btn>0.06` (bright buttons) | RESULTS |
+| 5 | yellow top + blue skip bottom | DOUBLE_COINS_POPUP |
+| 6 | green START right + `green_bl<0.05` + `bottom_white<0.10` | VEHICLE_SELECT |
+| 6b | BACK button bright + green upgrades | VEHICLE_SELECT (fallback) |
+| 7 | vivid bottom center + no green START | MAIN_MENU |
+| 7b | tab bar visible + dark background | MAIN_MENU (fallback) |
+
+Ключевое: `green_bl_btn` (S≥100,V≥130) — яркие UI кнопки, отличает RETRY/NEXT от зелёной травы Countryside.
 
 ## Actions
 Discrete(3): `0=nothing, 1=gas, 2=brake`

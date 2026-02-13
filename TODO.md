@@ -23,43 +23,33 @@ scrcpy-server v2.4 + PyAV H.264 декодер. `capture()` ≈ 0ms вместо
 - [x] `docker/Dockerfile.dashboard` — av + scrcpy-server.jar
 - [x] Пересобран образ, CasaOS контейнер перезапущен
 
-## [IN PROGRESS] Переключить game_loop / train на scrcpy backend
-scid баг пофикшен (0x7FFFFFFF), capture_backend переключен на "scrcpy" в config.py.
-Нужно провалидировать на profile_run.
+## [DONE] Переключить game_loop / train на scrcpy backend
+scid баг пофикшен (0x7FFFFFFF), capture_backend = "scrcpy" в config.py.
+Стабильно работает на 8 эмуляторах, ~27 FPS обучения.
 
 - [x] Фикс scid overflow (Java Integer.parseInt signed 32-bit)
 - [x] `capture_backend: str = "scrcpy"` в config.py
-- [ ] Прогнать `profile_run.py --backend scrcpy` — убедиться что capture ≈ 0ms
-- [ ] Прогнать game_loop на 8 эмуляторах с scrcpy — проверить стабильность
-- [ ] Закоммитить финальное переключение
+- [x] Стабильная работа на 8 эмуляторах (подтверждено при обучении)
+- [x] No periodic codec reset, AVError catch, 30s stale watchdog
 
-## Dashboard: панель обучения
-Сейчас дашборд показывает стримы и Docker-статусы. Нужна информация об обучении.
+## [PARTIALLY DONE] Dashboard: панель обучения
+Базовые метрики реализованы (JSONL логи + API + Chart.js). Остались расширенные метрики.
 
-### Панель метрик (верхняя полоса)
-- [ ] Статус обучения: running / paused / stopped
-- [ ] Total timesteps / target
-- [ ] Elapsed time
-- [ ] Steps/sec (текущий throughput)
-- [ ] Episodes completed
+### [DONE] Базовые метрики
+- [x] JSONL логи: `logs/train_episodes.jsonl`, `logs/nav_events.jsonl`, `logs/training_status.json`
+- [x] API: `/api/training/{status,episodes,events}` — server.py читает из logs/
+- [x] Chart.js графики (distance + reward), stats grid, nav events log, 5s polling
+- [x] Docker: `logs/` монтируется как `/app/logs:ro`
 
-### Карточки эмуляторов — добавить RL-метрики
+### Карточки эмуляторов — расширенные метрики
 - [ ] Game state (RACING / DRIVER_DOWN / RESULTS / ...)
 - [ ] Текущий reward эпизода
 - [ ] Distance (текущая / max за эпизод)
 - [ ] Fuel bar
 - [ ] Текущее действие агента (GAS / BRAKE / NOTHING)
 
-### Графики (нижняя панель)
-- [ ] Episode reward (скользящее среднее)
-- [ ] Best distance по эпизодам
-- [ ] Steps per episode
-- [ ] Использовать Chart.js (lightweight, без сборки)
-
-### Бэкенд
+### Бэкенд — управление обучением
 - [ ] `POST /api/training/start` / `stop` / `pause` — управление обучением
-- [ ] `GET /api/training/status` — текущие метрики (JSON)
-- [ ] `GET /api/training/history` — история эпизодов (последние N)
 - [ ] Shared state через файл или multiprocessing.Manager (train.py → dashboard)
 
 ## Ускорение эмуляторов (speedhack)
@@ -77,10 +67,28 @@ scid баг пофикшен (0x7FFFFFFF), capture_backend переключен 
 - [ ] Подменяет `clock_gettime` — игра думает что время идёт быстрее
 
 ## Оптимизация обучения
-- [ ] Прогнать обучение с scrcpy capture — ожидаемо 2-3x ускорение
-- [ ] Проверить reward рост в TensorBoard
-- [ ] Запустить 500k+ с `--resume`
+- [x] Обучение с scrcpy capture — ~27 FPS (8 эмуляторов)
+- [x] `--resume` работает, `--skip-envs` для исключения эмуляторов
+- [ ] Проверить reward рост в TensorBoard после фиксов навигации
+- [ ] Запустить длинное обучение (1M+ timesteps) с новыми фиксами
 - [ ] Попробовать 12-16 эмуляторов (Ryzen 5600 может потянуть)
+
+## [DONE] Vision + Navigator фиксы (2026-02-13)
+Серия фиксов для надёжной навигации меню между эпизодами.
+
+- [x] **green_bl_btn**: яркий зелёный HSV [35,100,130]-[85,255,255] — отличает UI кнопки от травы (Countryside)
+- [x] **OFFLINE step 0b**: раннее определение OFFLINE popup → MAIN_MENU (overall_v<100 + tab_bright>0.05 + dark_center>50%)
+- [x] **TOUCH_TO_CONTINUE**: tap (400,460) вместо center (400,240) — center поглощается stats card
+- [x] **RESULTS animation wait**: 1.5s перед первым RETRY tap (кнопки не интерактивны во время анимации)
+- [x] **RESULTS double-tap**: RETRY + 0.3s + RETRY для надёжности
+- [x] **RETRY/NEXT координаты**: Y=448 (было 430, не попадало в кнопку)
+- [x] **RESULTS stuck fallback**: tap RETRY вместо бесполезного center
+- [x] **Nav frame logging**: JPEG-скриншоты на каждый ensure_racing() → `logs/nav_frames/`
+- [x] **Mid-race interrupts**: env.py ловит CAPTCHA, DOUBLE_COINS, MAIN_MENU, VEHICLE_SELECT во время RACING
+- [x] **--skip-envs**: исключение эмуляторов из обучения (`--skip-envs 0 3`)
+
+### Нерешённое
+- [ ] RESULTS RETRY всё ещё ~48% s1 rate — нужно расследование (возможно анимация длиннее 1.5s)
 
 ## Мелкие задачи
 - [ ] iptables правила в автозагрузку (пропадают после ребута)
@@ -92,4 +100,3 @@ scid баг пофикшен (0x7FFFFFFF), capture_backend переключен 
     adb -s localhost:$p shell settings put global animator_duration_scale 0
   done
   ```
-- [ ] Собрать debug-кадры UNKNOWN стейта для анализа ложных срабатываний

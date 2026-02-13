@@ -72,12 +72,20 @@
 - [x] Чекпоинты каждые ~5000 шагов
 - [x] TensorBoard логирование
 - [x] `--resume` для продолжения обучения
-- [x] Фикс ложной CAPTCHA на главном меню (overall_V < 75)
+- [x] `--skip-envs` для исключения эмуляторов из обучения
+- [x] Фикс ложной CAPTCHA на главном меню (overall_V < 50 + tab bar guard)
 - [x] Фикс RPM-dial guard для тёмных карт
 - [x] 3-шаговый CAPTCHA handler (BACK → ADVENTURE → relaunch)
 - [x] Portrait frame detection → auto-relaunch
-- [ ] **ТЕКУЩЕЕ:** Обучение 100k timesteps на 8 эмуляторах (~14 часов)
-- [ ] **TODO:** Анализ результатов, тюнинг гиперпараметров
+- [x] OFFLINE popup раннее детектирование (step 0b) — на любом табе
+- [x] Mid-race interrupt recovery: MAIN_MENU/VEHICLE_SELECT → ensure_racing()
+- [x] `green_bl_btn` (S≥100,V≥130) — отделение кнопок RETRY/NEXT от травы Countryside
+- [x] TOUCH_TO_CONTINUE: тап (400,460) вместо центра панели
+- [x] RESULTS: ожидание 1.5с анимации + двойной тап RETRY (87,448)
+- [x] VEHICLE_SELECT fallback: BACK button + green upgrade cards
+- [x] Nav frame logging (JPEG) для диагностики навигации
+- [ ] **ТЕКУЩЕЕ:** Обучение на 8 эмуляторах, best distance ~185м
+- [ ] **TODO:** Анализ RESULTS stuck rate, тюнинг гиперпараметров
 
 ### Шаг 9: Imitation Learning — НЕ НАЧАТ
 ### Шаг 10: Полное обучение — НЕ НАЧАТ
