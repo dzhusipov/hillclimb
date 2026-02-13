@@ -420,9 +420,11 @@ class VisionAnalyzer:
         if np.mean(vivid_bc) > 0.10 and green_start < 0.03:
             return GameState.MAIN_MENU
 
-        # 7b. MAIN_MENU fallback: tab bar clearly visible → menu screen
-        #     Catches CUPS/TEAM/EVENTS tabs + OFFLINE popup overlay
-        if _tab_bright > 0.05:
+        # 7b. MAIN_MENU fallback: tab bar visible + dark background → OFFLINE popup
+        #     Tab strip has bright pixels (tab text) + dark gaps (separators/bg).
+        #     RACING sky is all-bright (dark < 0.10), menu tabs have dark > 0.50.
+        _tab_dark = np.mean(_tab[:, :, 2] < 60)
+        if _tab_bright > 0.05 and _tab_dark > 0.40:
             return GameState.MAIN_MENU
 
         # Fallback: horizontal fuel gauge check (legacy)

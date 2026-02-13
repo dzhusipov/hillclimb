@@ -169,8 +169,10 @@ class Navigator:
 
             # Transition table
             if gs == GameState.MAIN_MENU:
-                # Всегда сначала ADVENTURE — гарантирует правильный таб
-                # (CUPS/TEAM/EVENTS тоже детектятся как MAIN_MENU)
+                # ADVENTURE tap — переключает таб + закрывает OFFLINE попап
+                self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+                time.sleep(0.5)
+                # Повторный тап — OFFLINE может пережить первый тап
                 self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
                 time.sleep(0.4)
                 print(f"  [NAV] → ADVENTURE + RACE ({cfg.race_button.x}, {cfg.race_button.y})")
@@ -224,24 +226,30 @@ class Navigator:
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.UNKNOWN:
-                self._save_debug_frame(frame, "unknown")
                 if self._same_state_count == 0:
-                    # 1) ADVENTURE tap — пробивает OFFLINE popup, неправильный таб
-                    print(f"  [NAV] → UNKNOWN — ADVENTURE tab")
-                    self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-                    self._wait_transition(gs, timeout=2.0, min_wait=0.5)
+                    # 1) Ждём — скорее всего переходная анимация (загрузка уровня)
+                    #    НЕ тапаем ничего, чтобы не вылететь на MAIN_MENU
+                    print(f"  [NAV] → UNKNOWN — waiting (transition?)")
+                    time.sleep(0.8)
                 elif self._same_state_count == 1:
                     # 2) BACK — закрывает PAUSED, Parts/Upgrade, попапы
                     print(f"  [NAV] → UNKNOWN — BACK")
                     self._ctrl.keyevent("KEYCODE_BACK")
                     self._wait_transition(gs, timeout=2.0, min_wait=0.5)
-                elif self._same_state_count < 4:
+                elif self._same_state_count == 2:
                     # 3) Тап центр — TOUCH_TO_CONTINUE, RESUME, dismiss
-                    print(f"  [NAV] → UNKNOWN stuck — tap center")
+                    print(f"  [NAV] → UNKNOWN — tap center")
                     self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                     self._wait_transition(gs, timeout=2.0, min_wait=0.3)
+                elif self._same_state_count < 5:
+                    # 4) ADVENTURE — пробивает OFFLINE popup, неправильный таб
+                    self._save_debug_frame(frame, "unknown")
+                    print(f"  [NAV] → UNKNOWN — ADVENTURE tab")
+                    self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+                    self._wait_transition(gs, timeout=2.0, min_wait=0.5)
                 else:
-                    # 4) Ничего не помогает — relaunch
+                    # 5) Ничего не помогает — relaunch
+                    self._save_debug_frame(frame, "unknown")
                     print(f"  [NAV] → UNKNOWN stuck {self._same_state_count}x — relaunch")
                     self._log_nav_event("stuck_detected", gs.name, "", "relaunch",
                                         {"cycles": self._same_state_count})

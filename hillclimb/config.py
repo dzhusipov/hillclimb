@@ -75,8 +75,8 @@ class Config:
     back_button: Point = field(default_factory=lambda: Point(x=65, y=445))
     skip_button: Point = field(default_factory=lambda: Point(x=400, y=300))
     close_popup_button: Point = field(default_factory=lambda: Point(x=400, y=240))
-    retry_button: Point = field(default_factory=lambda: Point(x=50, y=448))
-    next_button: Point = field(default_factory=lambda: Point(x=750, y=448))
+    retry_button: Point = field(default_factory=lambda: Point(x=87, y=430))
+    next_button: Point = field(default_factory=lambda: Point(x=708, y=430))
     center_screen: Point = field(default_factory=lambda: Point(x=400, y=240))
     adventure_tab: Point = field(default_factory=lambda: Point(x=155, y=25))
 
