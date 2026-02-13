@@ -161,11 +161,15 @@ class Navigator:
             self._prev_state = gs
 
             if self._same_state_count >= 3 and gs != GameState.RACING:
-                print(f"  [NAV] STUCK on {gs.name} for {self._same_state_count} cycles — fallback tap center")
+                print(f"  [NAV] STUCK on {gs.name} for {self._same_state_count} cycles — fallback")
                 self._save_debug_frame(frame, f"stuck_{gs.name}")
-                self._log_nav_event("stuck_detected", gs.name, gs.name, "tap_center",
+                self._log_nav_event("stuck_detected", gs.name, gs.name, "fallback",
                                     {"cycles": self._same_state_count})
-                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
+                if gs == GameState.RESULTS:
+                    # RETRY button — center tap hits stats panel (useless)
+                    self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
+                else:
+                    self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                 self._wait_transition(gs, timeout=2.0, min_wait=0.3)
                 self._same_state_count = 0
                 continue
@@ -237,15 +241,23 @@ class Navigator:
                 self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.TOUCH_TO_CONTINUE:
-                print(f"  [NAV] → tap center (TOUCH_TO_CONTINUE)")
-                self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                self._wait_transition(gs, timeout=3.0, min_wait=0.3)
+                # Tap below the card area — center (400,240) lands on the card
+                # and gets absorbed by the panel.  "TOUCH TO CONTINUE" text is at ~y=460.
+                print(f"  [NAV] → tap bottom (TOUCH_TO_CONTINUE)")
+                self._ctrl.tap(cfg.center_screen.x, 460)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
 
             elif gs == GameState.RESULTS:
                 self._last_results = state
+                # RESULTS screen has entrance animation (~1-2s) during which
+                # buttons are NOT interactive.  Wait before first tap.
+                if self._same_state_count == 0:
+                    time.sleep(1.5)
                 print(f"  [NAV] → tap RETRY ({cfg.retry_button.x}, {cfg.retry_button.y})")
                 self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
-                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
+                time.sleep(0.3)
+                self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
+                self._wait_transition(gs, timeout=4.0, min_wait=0.5)
 
             elif gs == GameState.CAPTCHA:
                 print(f"  [NAV] → solving CAPTCHA...")

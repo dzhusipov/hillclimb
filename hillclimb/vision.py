@@ -315,6 +315,10 @@ class VisionAnalyzer:
         bottom_left = hsv[int(h * 0.85):, : w // 3]
         bottom_right = hsv[int(h * 0.85):, 2 * w // 3 :]
         green_bl = np.mean(cv2.inRange(bottom_left, green_lower, green_upper) > 0)
+        # Bright green for UI buttons only (RETRY/NEXT), excludes landscape grass
+        btn_green_lower = np.array([35, 100, 130], dtype=np.uint8)
+        btn_green_upper = np.array([85, 255, 255], dtype=np.uint8)
+        green_bl_btn = np.mean(cv2.inRange(bottom_left, btn_green_lower, btn_green_upper) > 0)
 
         # Green RESPAWN button in center = OUT OF FUEL (treat as DRIVER_DOWN)
         if red_upper > 0.08:
@@ -345,7 +349,7 @@ class VisionAnalyzer:
             )
             bl_zone = hsv[int(h * 0.85):, :w // 4]
             bl_bright = np.mean(bl_zone[:, :, 2] > 150)
-            if (np.mean(panel_gray) > 0.10 and green_bl < 0.05
+            if (np.mean(panel_gray) > 0.10 and green_bl_btn < 0.02
                     and bl_bright < 0.10):
                 return GameState.TOUCH_TO_CONTINUE
 
@@ -383,14 +387,15 @@ class VisionAnalyzer:
         # 4. RESULTS: зелёные кнопки внизу (RETRY слева, NEXT справа)
         #    Иногда NEXT не видна (анимация) — достаточно RETRY + серая панель
         #    Exclude splash screen: too vivid/colorful center
+        #    Use green_bl_btn (bright buttons only) to avoid matching landscape grass.
         center_quarter = hsv[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
         vivid_center = np.mean(
             (center_quarter[:, :, 1] > 80) & (center_quarter[:, :, 2] > 80))
-        green_br = np.mean(cv2.inRange(bottom_right, green_lower, green_upper) > 0)
-        if green_bl > 0.08 and green_br > 0.08 and vivid_center < 0.25:
+        green_br_btn = np.mean(cv2.inRange(bottom_right, btn_green_lower, btn_green_upper) > 0)
+        if green_bl_btn > 0.06 and green_br_btn > 0.06 and vivid_center < 0.25:
             return GameState.RESULTS
         # Fallback: only RETRY visible + gray results panel in center
-        if green_bl > 0.08:
+        if green_bl_btn > 0.06:
             panel = hsv[int(h * 0.3):int(h * 0.7), w // 4 : 3 * w // 4]
             panel_gray = (
                 (panel[:, :, 1] < 40) &  # low saturation
