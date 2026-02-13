@@ -27,6 +27,12 @@ from web.emulator import (
 )
 from web.streamer import StreamManager
 
+# 1x1 чёрный JPEG — placeholder когда кадр ещё не получен
+import cv2
+import numpy as np
+_, _buf = cv2.imencode(".jpg", np.zeros((1, 1, 3), dtype=np.uint8))
+_PLACEHOLDER_JPEG = _buf.tobytes()
+
 
 class TouchEvent(BaseModel):
     action: str  # "down" or "up"
@@ -100,12 +106,14 @@ async def snapshot(emu_id: int):
     if frame:
         return Response(content=frame, media_type="image/jpeg",
                         headers={"Cache-Control": "no-cache"})
-    return Response(status_code=204)
+    # Нет кадра — 1x1 чёрный JPEG чтобы фронт не мигал
+    return Response(content=_PLACEHOLDER_JPEG, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-cache"})
 
 
 @app.websocket("/ws/stream/{emu_id}")
 async def ws_stream(websocket: WebSocket, emu_id: int):
-    """WebSocket: push JPEG frames at ~30 FPS."""
+    """WebSocket: push JPEG frames (scrcpy delivers ~10 FPS, poll at 30 Hz)."""
     await websocket.accept()
     stream_manager.get_or_create(emu_id)
     prev_frame = None
@@ -113,11 +121,17 @@ async def ws_stream(websocket: WebSocket, emu_id: int):
         while True:
             frame = stream_manager.get_frame(emu_id)
             if frame is not None and frame is not prev_frame:
-                await websocket.send_bytes(frame)
+                try:
+                    await asyncio.wait_for(websocket.send_bytes(frame), timeout=2.0)
+                except asyncio.TimeoutError:
+                    logger.warning("WS send timeout for emu %d — dropping client", emu_id)
+                    break
                 prev_frame = frame
             await asyncio.sleep(1 / 30)
-    except (WebSocketDisconnect, Exception):
+    except WebSocketDisconnect:
         pass
+    except Exception as e:
+        logger.debug("WS stream error emu %d: %s", emu_id, e)
 
 
 @app.get("/api/status")
@@ -194,24 +208,42 @@ async def api_touch(emu_id: int, event: TouchEvent):
 
 def _read_jsonl_tail(filepath: Path, limit: int, env_idx: Optional[int] = None,
                      event_type: Optional[str] = None) -> list[dict]:
-    """Read last `limit` lines from a JSONL file with optional filtering."""
+    """Read last `limit` lines from a JSONL file with optional filtering.
+
+    Uses seek-from-end to avoid reading the entire file on every request.
+    """
     if not filepath.exists():
         return []
+    has_filter = env_idx is not None or event_type is not None
+    # Without filters: read only tail of the file (seek from end)
+    # With filters: must scan whole file (filter reduces result set)
+    read_limit = limit * 20 if has_filter else limit * 2  # read extra for safety
+    try:
+        with open(filepath, "rb") as fb:
+            fb.seek(0, 2)
+            fsize = fb.tell()
+            # Estimate ~200 bytes per line, read enough bytes
+            chunk = min(fsize, read_limit * 200)
+            fb.seek(max(0, fsize - chunk))
+            if fb.tell() > 0:
+                fb.readline()  # skip partial first line
+            raw_lines = fb.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
     records: list[dict] = []
-    with open(filepath) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if env_idx is not None and rec.get("env_idx") != env_idx:
-                continue
-            if event_type is not None and rec.get("event") != event_type:
-                continue
-            records.append(rec)
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if env_idx is not None and rec.get("env_idx") != env_idx:
+            continue
+        if event_type is not None and rec.get("event") != event_type:
+            continue
+        records.append(rec)
     return records[-limit:]
 
 
