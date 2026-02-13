@@ -309,9 +309,14 @@ class VisionAnalyzer:
                           np.array([180, 255, 255], dtype=np.uint8))
         )
         red_upper = np.mean(red_mask > 0)
-        # Green RESPAWN button in center = OUT OF FUEL (treat as DRIVER_DOWN)
+        # Green colour ranges (reused by multiple checks below)
         green_lower = np.array([35, 80, 80], dtype=np.uint8)
         green_upper = np.array([85, 255, 255], dtype=np.uint8)
+        bottom_left = hsv[int(h * 0.85):, : w // 3]
+        bottom_right = hsv[int(h * 0.85):, 2 * w // 3 :]
+        green_bl = np.mean(cv2.inRange(bottom_left, green_lower, green_upper) > 0)
+
+        # Green RESPAWN button in center = OUT OF FUEL (treat as DRIVER_DOWN)
         if red_upper > 0.08:
             center_zone = hsv[h // 3 : 2 * h // 3, w // 4 : 3 * w // 4]
             green_center = np.mean(
@@ -329,6 +334,8 @@ class VisionAnalyzer:
         # 2b. TOUCH_TO_CONTINUE (level summary): gray panel + white text, no green buttons
         #     "Countryside ADVENTURE" summary: bright center panel, no dark overlay,
         #     "TOUCH TO CONTINUE" white text at bottom.  No RESULTS buttons yet.
+        #     Exclude RESULTS by checking green_bl (RETRY button in bottom-left).
+        #     NB: green_bottom (full strip) catches landscape grass → use green_bl.
         #     Exclude VEHICLE_SELECT (BOLT etc.) by checking for BACK button in bottom-left.
         if bottom_white > 0.04:
             panel = hsv[int(h * 0.3):int(h * 0.7), w // 4 : 3 * w // 4]
@@ -336,11 +343,9 @@ class VisionAnalyzer:
                 (panel[:, :, 1] < 50) &
                 (panel[:, :, 2] > 100) & (panel[:, :, 2] < 220)
             )
-            green_bottom = np.mean(cv2.inRange(
-                hsv[int(h * 0.85):, :], green_lower, green_upper) > 0)
             bl_zone = hsv[int(h * 0.85):, :w // 4]
             bl_bright = np.mean(bl_zone[:, :, 2] > 150)
-            if (np.mean(panel_gray) > 0.10 and green_bottom < 0.03
+            if (np.mean(panel_gray) > 0.10 and green_bl < 0.05
                     and bl_bright < 0.10):
                 return GameState.TOUCH_TO_CONTINUE
 
@@ -381,9 +386,6 @@ class VisionAnalyzer:
         center_quarter = hsv[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
         vivid_center = np.mean(
             (center_quarter[:, :, 1] > 80) & (center_quarter[:, :, 2] > 80))
-        bottom_left = hsv[int(h * 0.85):, : w // 3]
-        bottom_right = hsv[int(h * 0.85):, 2 * w // 3 :]
-        green_bl = np.mean(cv2.inRange(bottom_left, green_lower, green_upper) > 0)
         green_br = np.mean(cv2.inRange(bottom_right, green_lower, green_upper) > 0)
         if green_bl > 0.08 and green_br > 0.08 and vivid_center < 0.25:
             return GameState.RESULTS
@@ -416,11 +418,13 @@ class VisionAnalyzer:
         # 6. VEHICLE_SELECT: зелёная кнопка START в правом нижнем углу
         #    START button hue is yellow-green (H~27) and dim (V~65),
         #    so use a wider range than the standard green_lower/upper.
+        #    Guard: bottom_white excludes level summary ("TOUCH TO CONTINUE"
+        #    text + Countryside green grass triggers false green_start).
         start_lower = np.array([20, 40, 55], dtype=np.uint8)
         start_upper = np.array([85, 255, 255], dtype=np.uint8)
         green_start = np.mean(cv2.inRange(
             bottom_right, start_lower, start_upper) > 0)
-        if green_start > 0.05 and green_bl < 0.05:
+        if green_start > 0.05 and green_bl < 0.05 and bottom_white < 0.10:
             return GameState.VEHICLE_SELECT
 
         # 6b. VEHICLE_SELECT fallback: checkered flag covers START button,
