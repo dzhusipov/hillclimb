@@ -313,6 +313,24 @@ class VisionAnalyzer:
         if dark_ratio > 0.4 and bottom_white > 0.05 and orange_ratio < 0.03:
             return GameState.TOUCH_TO_CONTINUE
 
+        # 2b. TOUCH_TO_CONTINUE (level summary): gray panel + white text, no green buttons
+        #     "Countryside ADVENTURE" summary: bright center panel, no dark overlay,
+        #     "TOUCH TO CONTINUE" white text at bottom.  No RESULTS buttons yet.
+        #     Exclude VEHICLE_SELECT (BOLT etc.) by checking for BACK button in bottom-left.
+        if bottom_white > 0.04:
+            panel = hsv[int(h * 0.3):int(h * 0.7), w // 4 : 3 * w // 4]
+            panel_gray = (
+                (panel[:, :, 1] < 50) &
+                (panel[:, :, 2] > 100) & (panel[:, :, 2] < 220)
+            )
+            green_bottom = np.mean(cv2.inRange(
+                hsv[int(h * 0.85):, :], green_lower, green_upper) > 0)
+            bl_zone = hsv[int(h * 0.85):, :w // 4]
+            bl_bright = np.mean(bl_zone[:, :, 2] > 150)
+            if (np.mean(panel_gray) > 0.10 and green_bottom < 0.03
+                    and bl_bright < 0.10):
+                return GameState.TOUCH_TO_CONTINUE
+
         # 3. RACING: циферблаты с красной стрелкой — самый надёжный сигнал
         #    Проверяем ДО RESULTS, потому что зелёная трава Countryside
         #    ложно срабатывает как зелёные кнопки RETRY/NEXT
@@ -383,8 +401,12 @@ class VisionAnalyzer:
             return GameState.DOUBLE_COINS_POPUP
 
         # 6. VEHICLE_SELECT: зелёная кнопка START в правом нижнем углу
+        #    START button hue is yellow-green (H~27) and dim (V~65),
+        #    so use a wider range than the standard green_lower/upper.
+        start_lower = np.array([20, 40, 55], dtype=np.uint8)
+        start_upper = np.array([85, 255, 255], dtype=np.uint8)
         green_start = np.mean(cv2.inRange(
-            bottom_right, green_lower, green_upper) > 0)
+            bottom_right, start_lower, start_upper) > 0)
         if green_start > 0.05 and green_bl < 0.05:
             return GameState.VEHICLE_SELECT
 
@@ -394,6 +416,11 @@ class VisionAnalyzer:
             (bottom_center[:, :, 1] > 120) & (bottom_center[:, :, 2] > 120)
         )
         if np.mean(vivid_bc) > 0.10 and green_start < 0.03:
+            return GameState.MAIN_MENU
+
+        # 7b. MAIN_MENU fallback: tab bar clearly visible → menu screen
+        #     Catches CUPS/TEAM/EVENTS tabs + OFFLINE popup overlay
+        if _tab_bright > 0.05:
             return GameState.MAIN_MENU
 
         # Fallback: horizontal fuel gauge check (legacy)

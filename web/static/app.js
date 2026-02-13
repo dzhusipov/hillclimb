@@ -143,39 +143,9 @@ function setupTouchHandlers() {
     });
 }
 
-// --- WebSocket streaming (scrcpy → JPEG push, ~30 FPS) ---
+// --- Snapshot polling ---
 
-function startWebSocketStream(img, emuId) {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${proto}//${location.host}/ws/stream/${emuId}`;
-    const ws = new WebSocket(url);
-    ws.binaryType = 'blob';
-
-    let prevUrl = null;
-
-    ws.onmessage = (event) => {
-        const blobUrl = URL.createObjectURL(event.data);
-        img.onload = () => {
-            if (prevUrl) URL.revokeObjectURL(prevUrl);
-            prevUrl = blobUrl;
-        };
-        img.src = blobUrl;
-        img.style.display = 'block';
-        const placeholder = img.nextElementSibling;
-        if (placeholder) placeholder.style.display = 'none';
-    };
-
-    ws.onclose = () => {
-        // Reconnect after 2s
-        setTimeout(() => startWebSocketStream(img, emuId), 2000);
-    };
-
-    ws.onerror = () => ws.close();
-}
-
-// --- Snapshot polling (fallback when WebSocket not available) ---
-
-const SNAPSHOT_INTERVAL = 800;
+const SNAPSHOT_INTERVAL = 4000;
 
 function refreshSnapshots() {
     document.querySelectorAll('.stream[data-fallback="true"]').forEach(img => {
@@ -202,13 +172,14 @@ function initStreams() {
     document.querySelectorAll('.stream').forEach(img => {
         const emuId = img.dataset.emuId;
         if (emuId === undefined) return;
-        startWebSocketStream(img, emuId);
+        // Snapshot polling mode (low CPU, no scrcpy needed)
+        img.dataset.fallback = 'true';
     });
 }
 
 // --- Training metrics polling ---
 
-const TRAINING_POLL = 5000;  // 5s — enough for dashboard view
+const TRAINING_POLL = 30000;  // 30s — low CPU overhead
 let distanceChart = null;
 
 function updateTrainingStatus() {

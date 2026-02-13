@@ -17,14 +17,10 @@ RUN pip install --no-cache-dir \
     jinja2 \
     python-multipart \
     opencv-python-headless \
-    numpy \
-    av
+    numpy
 
 WORKDIR /app
 COPY web/ /app/web/
-COPY hillclimb/__init__.py /app/hillclimb/__init__.py
-COPY hillclimb/scrcpy_capture.py /app/hillclimb/scrcpy_capture.py
-COPY vendor/scrcpy-server.jar /app/vendor/scrcpy-server.jar
 
 EXPOSE 8150
 

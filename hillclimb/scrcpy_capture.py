@@ -213,6 +213,8 @@ class ScrcpyCapture:
         import av
 
         codec = av.CodecContext.create("h264", "r")
+        last_frame_at = time.time()
+        STALE_RESTART = 30  # restart stream if no frame for 30s
 
         while self._running:
             try:
@@ -223,7 +225,12 @@ class ScrcpyCapture:
 
                 packets = codec.parse(data)
                 for pkt in packets:
-                    frames = codec.decode(pkt)
+                    try:
+                        frames = codec.decode(pkt)
+                    except av.AVError:
+                        # Decode error (corrupt packet, missing keyframe, etc.)
+                        # Skip and wait for next keyframe — don't kill the loop
+                        continue
                     for frame in frames:
                         arr = frame.to_ndarray(format="bgr24")
                         # Auto-rotate: ReDroid is 480x800 portrait,
@@ -234,8 +241,14 @@ class ScrcpyCapture:
                         with self._frame_lock:
                             self._frame = arr
                             self._frame_time = time.time()
+                        last_frame_at = time.time()
 
             except socket.timeout:
+                # Watchdog: if no decoded frame for 30s, stream is dead
+                if time.time() - last_frame_at > STALE_RESTART:
+                    logger.warning("No frames for %ds on %s — restarting stream",
+                                   STALE_RESTART, self._serial)
+                    break
                 continue
             except OSError as e:
                 if self._running:
@@ -245,6 +258,9 @@ class ScrcpyCapture:
                 if self._running:
                     logger.error("Decode error on %s: %s", self._serial, e)
                 break
+
+        # Clean up codec context
+        del codec
 
         if self._running:
             logger.warning("Decode loop exited on %s, will attempt restart",

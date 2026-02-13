@@ -28,9 +28,9 @@ class HillClimbEnv(gym.Env):
         0 = nothing, 1 = gas, 2 = brake
 
     Reward:
-        +distance_delta * 1.0 (main signal)
-        +speed * 0.1 (speed bonus)
-        -5.0 if crashed
+        +distance_delta * 1.0 (main signal, clamped 5m/step)
+        +speed * 0.1 (RPM proxy, dense signal)
+        -10.0 if crashed
         +0.5 if fuel picked up
         -0.05 * (0.2 - fuel) / 0.2 when fuel < 0.2
         -0.1 if stalled (no progress while RACING)
@@ -66,6 +66,7 @@ class HillClimbEnv(gym.Env):
             bitrate=cfg.scrcpy_bitrate,
             server_jar=cfg.scrcpy_server_jar,
             dashboard_url=cfg.dashboard_url,
+            stale_timeout=5.0,  # reduce screencap fallbacks (less emulator CPU spikes)
         )
         self._vision = VisionAnalyzer()
         self._controller = ADBController(
@@ -307,6 +308,7 @@ class HillClimbEnv(gym.Env):
             bitrate=cfg.scrcpy_bitrate,
             server_jar=cfg.scrcpy_server_jar,
             dashboard_url=cfg.dashboard_url,
+            stale_timeout=5.0,
         )
         self._controller = ADBController(
             adb_serial=self._serial,
@@ -346,7 +348,7 @@ class HillClimbEnv(gym.Env):
 
         # Crash penalty
         if curr.game_state in (GameState.DRIVER_DOWN, GameState.TOUCH_TO_CONTINUE):
-            return -5.0
+            return -10.0
 
         if curr.game_state != GameState.RACING:
             return 0.0
@@ -354,10 +356,10 @@ class HillClimbEnv(gym.Env):
         # === Primary: distance gained (via OCR) ===
         if prev is not None and prev.distance_m > 0 and curr.distance_m > prev.distance_m:
             delta = curr.distance_m - prev.distance_m
-            if delta < 100:  # filter OCR glitches
-                reward += 1.0 * delta
+            delta = min(delta, 5.0)  # clamp per-step delta to ±5m (OCR noise filter)
+            reward += 1.0 * delta
 
-        # === Speed bonus ===
+        # === Speed bonus (dense signal, RPM proxy) ===
         reward += 0.1 * curr.rpm
 
         # === Fuel pickup bonus ===

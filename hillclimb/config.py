@@ -151,14 +151,14 @@ class Config:
 
     # -- RL training ----------------------------------------------------------
     model_dir: str = "models"
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 3e-4
     batch_size: int = 256
-    n_steps: int = 128
+    n_steps: int = 512
     total_timesteps: int = 10_000_000
     n_epochs: int = 4
     gamma: float = 0.99
     gae_lambda: float = 0.95
-    clip_range: float = 0.1
+    clip_range: float = 0.2
     ent_coef: float = 0.01
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5

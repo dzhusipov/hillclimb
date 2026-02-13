@@ -225,21 +225,24 @@ class Navigator:
 
             elif gs == GameState.UNKNOWN:
                 self._save_debug_frame(frame, "unknown")
-                if self._same_state_count < 2:
-                    # Первая попытка: ADVENTURE tap — пробивает OFFLINE overlay,
-                    # переключает неправильный таб (CUPS/TEAM/SHOP)
+                if self._same_state_count == 0:
+                    # 1) ADVENTURE tap — пробивает OFFLINE popup, неправильный таб
                     print(f"  [NAV] → UNKNOWN — ADVENTURE tab")
                     self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
                     self._wait_transition(gs, timeout=2.0, min_wait=0.5)
+                elif self._same_state_count == 1:
+                    # 2) BACK — закрывает PAUSED, Parts/Upgrade, попапы
+                    print(f"  [NAV] → UNKNOWN — BACK")
+                    self._ctrl.keyevent("KEYCODE_BACK")
+                    self._wait_transition(gs, timeout=2.0, min_wait=0.5)
                 elif self._same_state_count < 4:
-                    # ADVENTURE не помог — PAUSED или другой попап без табов
-                    # Тап центр экрана (RESUME на PAUSED, dismiss на попапах)
+                    # 3) Тап центр — TOUCH_TO_CONTINUE, RESUME, dismiss
                     print(f"  [NAV] → UNKNOWN stuck — tap center")
                     self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
                     self._wait_transition(gs, timeout=2.0, min_wait=0.3)
                 else:
-                    # Ничего не помогает — relaunch
-                    print(f"  [NAV] → UNKNOWN stuck {self._same_state_count}× — relaunch")
+                    # 4) Ничего не помогает — relaunch
+                    print(f"  [NAV] → UNKNOWN stuck {self._same_state_count}x — relaunch")
                     self._log_nav_event("stuck_detected", gs.name, "", "relaunch",
                                         {"cycles": self._same_state_count})
                     self._relaunch_game()
@@ -254,12 +257,15 @@ class Navigator:
         time.sleep(0.5)
         self._ctrl.shell("am start -n com.fingersoft.hcr2/.AppActivity")
         time.sleep(4.0)
-        # Dismiss "Viewing full screen" + OFFLINE popup by tapping GOT IT then ADVENTURE tab
-        self._ctrl.tap(500, 202)
-        time.sleep(0.3)
+        # Dismiss "Viewing full screen" (GOT IT) — landscape coords for ReDroid 15
+        self._ctrl.tap(315, 180)
+        time.sleep(0.5)
+        # Dismiss "Allow notifications?" → DON'T ALLOW
+        self._ctrl.tap(400, 320)
+        time.sleep(0.5)
+        # OFFLINE popup → tap ADVENTURE tab to dismiss + ensure correct tab
         self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-        time.sleep(1.5)
-        # OFFLINE popup may appear after a delay — tap ADVENTURE again
+        time.sleep(1.0)
         self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
         time.sleep(0.5)
 

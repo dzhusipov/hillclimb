@@ -1,6 +1,5 @@
 """FastAPI web dashboard for HCR2 emulator monitoring."""
 
-import asyncio
 import json
 import logging
 import time
@@ -8,8 +7,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -76,32 +75,9 @@ async def dashboard(request: Request):
     })
 
 
-@app.get("/stream/{emu_id}")
-async def video_stream(emu_id: int):
-    """MJPEG stream (legacy, limited by browser connection pool)."""
-    stream_manager.get_or_create(emu_id)
-
-    async def generate():
-        while True:
-            frame = stream_manager.get_frame(emu_id)
-            if frame:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-                )
-            await asyncio.sleep(0.5)
-
-    return StreamingResponse(
-        generate(),
-        media_type="multipart/x-mixed-replace; boundary=frame",
-    )
-
-
 @app.get("/snapshot/{emu_id}")
 async def snapshot(emu_id: int):
-    """Single JPEG snapshot (used by polling-based display for >6 emus)."""
-    from fastapi.responses import Response
-    stream_manager.get_or_create(emu_id)
+    """Single JPEG snapshot (used by polling-based display)."""
     frame = stream_manager.get_frame(emu_id)
     if frame:
         return Response(content=frame, media_type="image/jpeg",
@@ -109,29 +85,6 @@ async def snapshot(emu_id: int):
     # Нет кадра — 1x1 чёрный JPEG чтобы фронт не мигал
     return Response(content=_PLACEHOLDER_JPEG, media_type="image/jpeg",
                     headers={"Cache-Control": "no-cache"})
-
-
-@app.websocket("/ws/stream/{emu_id}")
-async def ws_stream(websocket: WebSocket, emu_id: int):
-    """WebSocket: push JPEG frames (scrcpy delivers ~10 FPS, poll at 30 Hz)."""
-    await websocket.accept()
-    stream_manager.get_or_create(emu_id)
-    prev_frame = None
-    try:
-        while True:
-            frame = stream_manager.get_frame(emu_id)
-            if frame is not None and frame is not prev_frame:
-                try:
-                    await asyncio.wait_for(websocket.send_bytes(frame), timeout=2.0)
-                except asyncio.TimeoutError:
-                    logger.warning("WS send timeout for emu %d — dropping client", emu_id)
-                    break
-                prev_frame = frame
-            await asyncio.sleep(1 / 30)
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        logger.debug("WS stream error emu %d: %s", emu_id, e)
 
 
 @app.get("/api/status")
@@ -145,7 +98,7 @@ async def api_restart(emu_id: int):
     ok, msg = restart_emulator(emu_id)
     if ok:
         # Restart the stream
-        stream_manager.get_or_create(emu_id)
+        stream_manager.ensure_emulator(emu_id)
     return JSONResponse(
         content={"ok": ok, "message": msg},
         status_code=200 if ok else 500,
@@ -156,7 +109,7 @@ async def api_restart(emu_id: int):
 async def api_start(emu_id: int):
     ok, msg = start_emulator(emu_id)
     if ok:
-        stream_manager.get_or_create(emu_id)
+        stream_manager.ensure_emulator(emu_id)
     return JSONResponse(
         content={"ok": ok, "message": msg},
         status_code=200 if ok else 500,

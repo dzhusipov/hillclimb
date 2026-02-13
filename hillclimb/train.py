@@ -15,13 +15,6 @@ EPISODES_JSONL = LOG_DIR / "train_episodes.jsonl"
 STATUS_JSON = LOG_DIR / "training_status.json"
 
 
-def linear_schedule(initial_value: float):
-    """Linear decay from initial_value to 0."""
-    def _schedule(progress_remaining: float) -> float:
-        return progress_remaining * initial_value
-    return _schedule
-
-
 def _write_status(data: dict) -> None:
     """Atomically write training_status.json via temp + os.replace."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -157,6 +150,7 @@ def train(
         SubprocVecEnv,
         VecFrameStack,
         VecMonitor,
+        VecNormalize,
         VecTransposeImage,
     )
 
@@ -177,6 +171,7 @@ def train(
 
     env = SubprocVecEnv([make_env(s, render_mode) for s in serials])
     env = VecMonitor(env)
+    env = VecNormalize(env, norm_obs=False, norm_reward=True, clip_reward=10.0)
     env = VecFrameStack(env, n_stack=cfg.n_stack)
     env = VecTransposeImage(env)
 
@@ -196,13 +191,13 @@ def train(
         model = PPO(
             "MultiInputPolicy",
             env,
-            learning_rate=linear_schedule(cfg.learning_rate),
+            learning_rate=cfg.learning_rate,
             batch_size=batch_size,
             n_steps=n_steps,
             n_epochs=cfg.n_epochs,
             gamma=cfg.gamma,
             gae_lambda=cfg.gae_lambda,
-            clip_range=linear_schedule(cfg.clip_range),
+            clip_range=cfg.clip_range,
             ent_coef=cfg.ent_coef,
             vf_coef=cfg.vf_coef,
             max_grad_norm=cfg.max_grad_norm,
@@ -243,6 +238,11 @@ def train(
 
     model.save(str(save_path))
     print(f"Model saved to {save_path}")
+
+    # Save VecNormalize statistics (reward running mean/std)
+    vec_norm_path = save_path.with_suffix(".vecnorm.pkl")
+    env.save(str(vec_norm_path))
+    print(f"VecNormalize stats saved to {vec_norm_path}")
 
     # Mark training as inactive
     _write_status({"training_active": False, "last_update": time.time()})

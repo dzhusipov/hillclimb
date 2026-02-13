@@ -3,7 +3,7 @@ x-redroid-common: &redroid-common
   privileged: true
   mem_limit: ${MEM_LIMIT:-3g}
   cpus: ${CPU_LIMIT:-1.2}
-  pids_limit: 1024
+  pids_limit: 4096
   oom_score_adj: 500
   stop_grace_period: 30s
   command:
