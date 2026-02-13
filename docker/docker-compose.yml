@@ -11,6 +11,7 @@ x-redroid-common: &redroid-common
     - androidboot.redroid_width=${WIDTH:-480}
     - androidboot.redroid_height=${HEIGHT:-800}
     - androidboot.redroid_dpi=${DPI:-160}
+    - androidboot.redroid_fps=${FPS:-15}
   restart: "no"
   healthcheck:
     test: ["CMD-SHELL", "getprop sys.boot_completed 2>/dev/null | grep -q 1"]
