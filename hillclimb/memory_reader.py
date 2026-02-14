@@ -1,52 +1,35 @@
 """
-Memory reader for HCR2 — reads car physics data directly from game process memory.
+Memory reader for HCR2 — reads car position directly from game process memory.
 
-Uses the car body signature (70.0, 35.5, 0.5, 0.5, 140.0, 71.0) to locate
-the b2Body struct in heap, then reads position, velocity at known offsets.
+Uses `nodefinder` C tool that scans the largest scudo:primary region (~22MB)
+to find the car's Cocos2d-x Node via structural pattern + delta filtering,
+then streams pos_x/pos_y readings via binary protocol.
 
-Requires `safescan` and `safememserver` compiled and deployed at
-/data/local/tmp/ inside the emulator container.
+Structural pattern: scale [1,1,1] + rotation sin²+cos²=1 + pos_x copy at +108
++ car body markers (±0.707 at +96/+100) + pos_Y duplicate at [-36]=[-32].
+Typically finds ~2-5 exact car body Nodes out of 22MB, then delta filter picks
+the live (moving) one.
 
-Anti-cheat safe: never holds /proc/PID/mem fd for more than ~1ms.
-- safescan: opens/closes fd per memory region during scan
-- safememserver: opens/closes fd per read request
+Anti-cheat safe: reads ~22MB via process_vm_readv (limit ~70MB).
 
 Usage:
     reader = MemoryReader(container="hcr2-0")
-    reader.attach()       # find game PID + body address via safescan
-    data = reader.read()  # fast pread via safememserver (open→read→close)
-    print(data.pos_x, data.vel_x)
-    reader.detach()
+    if reader.scan():        # find car position (~2-3s when car is moving)
+        while racing:
+            state = reader.read()  # ~1ms per read
+            print(state.pos_x, state.distance)
+    reader.stop()
 """
 
-import os
-import subprocess
 import struct
+import subprocess
 import logging
 import time
-from dataclasses import dataclass
+import select
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
-
-# Car body struct offsets from body_x address
-OFFSET_POS_X = 0
-OFFSET_POS_Y = -4
-OFFSET_VEL_X = 56
-OFFSET_VEL_Y = 60
-OFFSET_ROT_SIN = -16
-OFFSET_ROT_COS = -12
-
-# AABB signature: 6 consecutive floats unique to car body
-BODY_SIGNATURE = struct.pack('<6f', 70.0, 35.5, 0.5, 0.5, 140.0, 71.0)
-SIG_OFFSET_FROM_BODY_X = 28  # signature starts at body_x + 28
-
-# Starting X position offset (displayed_distance ≈ pos_x - START_X_OFFSET)
-START_X_OFFSET = 83.0
-
-# Read span: from body_x - 16 to body_x + 64 = 80 bytes
-READ_BASE_OFFSET = -16
-READ_SIZE = 80
 
 
 @dataclass
@@ -54,240 +37,291 @@ class CarState:
     """Car physics state read from memory."""
     pos_x: float = 0.0
     pos_y: float = 0.0
-    vel_x: float = 0.0
-    vel_y: float = 0.0
-    rot_sin: float = 0.0
-    rot_cos: float = 0.0
+    vel_x: float = 0.0    # derived from delta pos_x / delta_t
+    vel_y: float = 0.0    # derived from delta pos_y / delta_t
     timestamp: float = 0.0
     valid: bool = False
 
+    # Initial position (set at scan time)
+    _initial_x: float = field(default=0.0, repr=False)
+
     @property
     def distance(self) -> float:
-        """Approximate displayed distance in meters."""
-        return self.pos_x - START_X_OFFSET if self.valid else 0.0
+        """Distance traveled since race start (meters)."""
+        return self.pos_x - self._initial_x if self.valid else 0.0
 
     @property
     def speed(self) -> float:
-        """Speed magnitude."""
+        """Speed magnitude (m/s)."""
         return (self.vel_x ** 2 + self.vel_y ** 2) ** 0.5 if self.valid else 0.0
-
-    @property
-    def angle_deg(self) -> float:
-        """Car angle in degrees (0 = level, positive = tilted back)."""
-        import math
-        if not self.valid or (self.rot_sin == 0 and self.rot_cos == 0):
-            return 0.0
-        return math.degrees(math.atan2(self.rot_sin, self.rot_cos))
 
 
 class MemoryReader:
-    """Reads HCR2 car body physics from process memory.
+    """Reads HCR2 car position from process memory via nodefinder.
 
-    Uses a persistent `memserver` process inside the container for fast reads
-    (~1ms per read vs ~50ms per docker exec subprocess).
+    nodefinder runs inside the Docker container, scans the largest
+    scudo:primary region (~22MB) for car body Nodes, and streams binary
+    pos_x/pos_y readings via stdout pipe.
     """
 
-    def __init__(self, container: str = "hcr2-0", package: str = "com.fingersoft.hcr2"):
+    def __init__(self, container: str = "hcr2-0",
+                 package: str = "com.fingersoft.hcr2",
+                 interval_ms: int = 20,
+                 max_sec: int = 120):
         self.container = container
         self.package = package
-        self.pid: Optional[int] = None
-        self.body_x_addr: Optional[int] = None
-        self._server: Optional[subprocess.Popen] = None
-        self._attached = False
+        self.interval_ms = interval_ms
+        self.max_sec = max_sec
 
-    def attach(self) -> bool:
-        """Find game PID, locate car body via signature scan, start memserver.
+        self._proc: Optional[subprocess.Popen] = None
+        self._pid: Optional[int] = None
+        self._initial_x: float = 0.0
+        self._initial_y: float = 0.0
+        self._last_x: float = 0.0
+        self._last_y: float = 0.0
+        self._last_time: float = 0.0
+        self._scanned: bool = False
 
-        Returns True if body was found and memserver started.
-        Call this at the start of each race (heap address changes between races).
-        """
-        self.detach()
+    @property
+    def is_active(self) -> bool:
+        """True if nodefinder is running and producing data."""
+        return self._scanned and self._proc is not None and self._proc.poll() is None
 
-        # Get PID
+    def _get_pid(self) -> Optional[int]:
+        """Get HCR2 game PID inside the container."""
         try:
             result = subprocess.run(
                 ["docker", "exec", self.container, "pidof", self.package],
                 capture_output=True, text=True, timeout=5
             )
-            if result.returncode != 0 or not result.stdout.strip():
-                logger.warning("Game not running on %s", self.container)
-                return False
-            self.pid = int(result.stdout.strip())
+            if result.returncode == 0 and result.stdout.strip():
+                return int(result.stdout.strip())
         except (subprocess.TimeoutExpired, ValueError) as e:
-            logger.error("Failed to get PID: %s", e)
+            logger.error("Failed to get PID on %s: %s", self.container, e)
+        return None
+
+    def scan(self, timeout: float = 10.0) -> bool:
+        """Scan memory to find car position address and start streaming.
+
+        Call this at the START of each race, after the car begins moving.
+        Takes ~3s (cocos2d scan + 2s wait + delta filter + validation).
+
+        Returns True if car position was found and streaming started.
+        """
+        self.stop()
+
+        # Get PID
+        self._pid = self._get_pid()
+        if not self._pid:
+            logger.warning("Game not running on %s", self.container)
             return False
 
-        # Run safescan to find body address (anti-cheat safe: open/close per region)
+        # Launch nodefinder
         try:
-            result = subprocess.run(
+            self._proc = subprocess.Popen(
                 ["docker", "exec", self.container,
-                 "/data/local/tmp/safescan", str(self.pid)],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0:
-                logger.warning("safescan failed: %s", result.stderr.strip())
-                return False
-
-            # safescan outputs hex address on stdout (e.g. "0x7a12345678\n")
-            addr_str = result.stdout.strip()
-            if addr_str:
-                self.body_x_addr = int(addr_str, 16)
-        except subprocess.TimeoutExpired:
-            logger.error("safescan timed out")
-            return False
-
-        if not self.body_x_addr:
-            logger.warning("Body signature not found (not in RACING state?)")
-            return False
-
-        # Start safememserver (anti-cheat safe: open/close per read)
-        try:
-            self._server = subprocess.Popen(
-                ["docker", "exec", "-i", self.container,
-                 "/data/local/tmp/safememserver", str(self.pid)],
-                stdin=subprocess.PIPE,
+                 "/data/local/tmp/nodefinder",
+                 str(self._pid),
+                 str(self.interval_ms),
+                 str(self.max_sec),
+                 "--wait=2"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=0,
             )
-            # Quick test read
-            state = self._read_raw()
-            if state is None:
-                logger.error("safememserver test read failed")
-                self._kill_server()
-                return False
         except OSError as e:
-            logger.error("Failed to start safememserver: %s", e)
+            logger.error("Failed to launch nodefinder: %s", e)
             return False
 
-        self._attached = True
-        logger.info("Attached: PID=%d body_x=0x%x", self.pid, self.body_x_addr)
-        return True
+        # Read header: "OK\n" + 2 floats (initial_x, initial_y)
+        try:
+            header_line = b""
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([self._proc.stdout], [], [], 0.5)
+                if ready:
+                    b = self._proc.stdout.read(1)
+                    if not b:
+                        break
+                    header_line += b
+                    if b == b'\n':
+                        break
 
-    def detach(self):
-        """Stop memserver and reset state."""
-        self._kill_server()
-        self.pid = None
-        self.body_x_addr = None
-        self._attached = False
+            header_str = header_line.decode('utf-8', errors='replace').strip()
 
-    def _kill_server(self):
-        if self._server:
+            if header_str.startswith("ERR:"):
+                logger.warning("nodefinder error on %s: %s", self.container, header_str)
+                self._kill()
+                return False
+
+            if header_str != "OK":
+                logger.warning("Unexpected nodefinder header on %s: %r", self.container, header_str)
+                self._kill()
+                return False
+
+            # Read initial position (2 floats = 8 bytes)
+            initial_data = self._read_exact(8, timeout=2.0)
+            if initial_data is None or len(initial_data) < 8:
+                logger.warning("Failed to read initial position from nodefinder")
+                self._kill()
+                return False
+
+            self._initial_x, self._initial_y = struct.unpack('<ff', initial_data)
+            self._last_x = self._initial_x
+            self._last_y = self._initial_y
+            self._last_time = time.monotonic()
+            self._scanned = True
+
+            logger.info("MemoryReader attached: %s PID=%d initial=(%.1f, %.1f)",
+                        self.container, self._pid, self._initial_x, self._initial_y)
+            return True
+
+        except Exception as e:
+            logger.error("nodefinder header read failed: %s", e)
+            self._kill()
+            return False
+
+    def read(self) -> CarState:
+        """Read current car position from the nodefinder pipe.
+
+        Returns CarState with valid=False if no data available or stream ended.
+        Non-blocking: returns the latest available sample, or stale data if none ready.
+        """
+        if not self.is_active:
+            return CarState()
+
+        # Read all available samples, keep the latest
+        # Protocol: normal frame = 8 bytes [pos_x, pos_y]
+        #           switch marker = 12 bytes [NaN, new_initial_x, new_initial_y]
+        pos_x = None
+        pos_y = None
+        now = time.monotonic()
+
+        while True:
+            ready, _, _ = select.select([self._proc.stdout], [], [], 0)
+            if not ready:
+                break
+            data = self._proc.stdout.read(8)
+            if not data or len(data) < 8:
+                self._scanned = False
+                return CarState()
+            x, y = struct.unpack('<ff', data)
+
+            # NaN marker = address switch, next 4 bytes = new_initial_y
+            if x != x:  # NaN check
+                extra = self._read_exact(4, timeout=1.0)
+                if extra and len(extra) == 4:
+                    new_initial_y = struct.unpack('<f', extra)[0]
+                    old_initial = self._initial_x
+                    self._initial_x = y  # "y" field carries new_initial_x
+                    self._initial_y = new_initial_y
+                    logger.info("MemoryReader: address switch, new initial=(%.1f, %.1f) old=%.1f",
+                                self._initial_x, self._initial_y, old_initial)
+                continue
+
+            pos_x, pos_y = x, y
+
+        if pos_x is None:
+            # No new data — return last known state
+            if self._last_time > 0:
+                return CarState(
+                    pos_x=self._last_x,
+                    pos_y=self._last_y,
+                    vel_x=0.0, vel_y=0.0,
+                    timestamp=self._last_time,
+                    valid=True,
+                    _initial_x=self._initial_x,
+                )
+            return CarState()
+
+        # Compute velocity from position delta
+        dt = now - self._last_time if self._last_time > 0 else 0.02
+        dt = max(dt, 0.001)  # avoid division by zero
+        vel_x = (pos_x - self._last_x) / dt
+        vel_y = (pos_y - self._last_y) / dt
+
+        self._last_x = pos_x
+        self._last_y = pos_y
+        self._last_time = now
+
+        return CarState(
+            pos_x=pos_x,
+            pos_y=pos_y,
+            vel_x=vel_x,
+            vel_y=vel_y,
+            timestamp=now,
+            valid=True,
+            _initial_x=self._initial_x,
+        )
+
+    def stop(self):
+        """Stop nodefinder and reset state."""
+        self._kill()
+        self._scanned = False
+        self._pid = None
+        self._initial_x = 0.0
+        self._initial_y = 0.0
+        self._last_x = 0.0
+        self._last_y = 0.0
+        self._last_time = 0.0
+
+    def _kill(self):
+        """Kill the nodefinder subprocess."""
+        if self._proc:
             try:
-                self._server.stdin.write(b"Q\n")
-                self._server.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
-            try:
-                self._server.terminate()
-                self._server.wait(timeout=2)
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
             except (subprocess.TimeoutExpired, OSError):
                 try:
-                    self._server.kill()
+                    self._proc.kill()
                 except OSError:
                     pass
-            self._server = None
+            self._proc = None
 
-    def _read_raw(self) -> Optional[bytes]:
-        """Read READ_SIZE bytes from memserver at body_x + READ_BASE_OFFSET."""
-        if not self._server or self._server.poll() is not None:
-            return None
-
-        addr = self.body_x_addr + READ_BASE_OFFSET
-        cmd = f"R {addr:x} {READ_SIZE}\n".encode()
-
-        try:
-            self._server.stdin.write(cmd)
-            self._server.stdin.flush()
-
-            fd = self._server.stdout.fileno()
-            data = b""
-            while len(data) < READ_SIZE:
-                chunk = os.read(fd, READ_SIZE - len(data))
+    def _read_exact(self, n: int, timeout: float = 2.0) -> Optional[bytes]:
+        """Read exactly n bytes from nodefinder stdout with timeout."""
+        data = b""
+        deadline = time.monotonic() + timeout
+        while len(data) < n and time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            ready, _, _ = select.select([self._proc.stdout], [], [], min(remaining, 0.5))
+            if ready:
+                chunk = self._proc.stdout.read(n - len(data))
                 if not chunk:
                     return None
                 data += chunk
-                # Check for error response (memserver sends "E\n")
-                if len(data) == 2 and data == b"E\n":
-                    return None
+        return data if len(data) == n else None
 
-            return data
-        except (BrokenPipeError, OSError):
-            return None
-
-    def read(self) -> CarState:
-        """Read current car state from memory.
-
-        Returns CarState with valid=False if read fails.
-        """
-        if not self._attached:
-            return CarState()
-
-        data = self._read_raw()
-        if data is None or len(data) < READ_SIZE:
-            self._attached = False
-            return CarState()
-
-        try:
-            # Offsets in data buffer (buffer starts at body_x - 16):
-            # body_x - 16 → buf[0]
-            # body_x - 12 → buf[4]
-            # body_x - 4  → buf[12]
-            # body_x + 0  → buf[16]
-            # body_x + 56 → buf[72]
-            # body_x + 60 → buf[76]
-            rot_sin = struct.unpack_from('<f', data, 0)[0]
-            rot_cos = struct.unpack_from('<f', data, 4)[0]
-            pos_y = struct.unpack_from('<f', data, 12)[0]
-            pos_x = struct.unpack_from('<f', data, 16)[0]
-            vel_x = struct.unpack_from('<f', data, 72)[0]
-            vel_y = struct.unpack_from('<f', data, 76)[0]
-
-            return CarState(
-                pos_x=pos_x, pos_y=pos_y,
-                vel_x=vel_x, vel_y=vel_y,
-                rot_sin=rot_sin, rot_cos=rot_cos,
-                timestamp=time.monotonic(),
-                valid=True
-            )
-        except struct.error:
-            self._attached = False
-            return CarState()
-
-    @property
-    def is_attached(self) -> bool:
-        return self._attached
+    def __del__(self):
+        self.stop()
 
 
 if __name__ == "__main__":
     import sys
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    container = sys.argv[1] if len(sys.argv) > 1 else "hcr2-0"
-    reader = MemoryReader(container=container)
+    container = sys.argv[1] if len(sys.argv) > 1 else "hcr2-test"
+    reader = MemoryReader(container=container, interval_ms=100)
 
-    print(f"Attaching to {container}...")
-    if not reader.attach():
-        print("Failed to attach. Is the game running in RACING state?")
+    print(f"Scanning memory on {container}...")
+    if not reader.scan(timeout=10):
+        print("Failed to scan. Is the game in RACING state with car moving?")
         sys.exit(1)
 
-    print(f"Attached! PID={reader.pid} body_x=0x{reader.body_x_addr:x}")
-    print("Reading car state every 100ms (Ctrl+C to stop)...")
-    print(f"{'time':>8s} {'pos_x':>10s} {'pos_y':>10s} {'vel_x':>10s} {'vel_y':>10s} {'dist':>8s} {'speed':>8s} {'angle':>8s}")
+    print(f"Streaming! initial=({reader._initial_x:.1f}, {reader._initial_y:.1f})")
+    print(f"{'time':>8s} {'pos_x':>10s} {'pos_y':>10s} {'vel_x':>8s} {'vel_y':>8s} {'dist':>8s} {'speed':>8s}")
 
     try:
         t0 = time.monotonic()
-        while True:
+        while reader.is_active:
             state = reader.read()
-            if not state.valid:
-                print("READ FAILED - game may have exited")
-                break
-            elapsed = time.monotonic() - t0
-            print(f"{elapsed:8.2f} {state.pos_x:10.3f} {state.pos_y:10.3f} "
-                  f"{state.vel_x:10.4f} {state.vel_y:10.4f} "
-                  f"{state.distance:8.1f} {state.speed:8.4f} {state.angle_deg:8.2f}")
+            if state.valid:
+                elapsed = time.monotonic() - t0
+                print(f"{elapsed:8.2f} {state.pos_x:10.2f} {state.pos_y:10.2f} "
+                      f"{state.vel_x:8.2f} {state.vel_y:8.2f} "
+                      f"{state.distance:8.1f} {state.speed:8.2f}")
             time.sleep(0.1)
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
-        reader.detach()
+        reader.stop()

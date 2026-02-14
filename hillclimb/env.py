@@ -12,6 +12,7 @@ from gymnasium import spaces
 from hillclimb.capture import ScreenCapture, create_capture
 from hillclimb.config import cfg
 from hillclimb.controller import ADBConnectionError, ADBController, Action
+from hillclimb.memory_reader import MemoryReader
 from hillclimb.navigator import Navigator
 from hillclimb.vision import GameState, VisionAnalyzer, VisionState, extract_game_field
 
@@ -92,6 +93,8 @@ class HillClimbEnv(gym.Env):
             save_nav_frames=True,
         )
 
+        self._mem_reader: MemoryReader | None = None
+
         self._prev_state: VisionState | None = None
         self._step_count = 0
         self._max_distance_m = 0.0
@@ -116,6 +119,11 @@ class HillClimbEnv(gym.Env):
         options: dict | None = None,
     ) -> tuple[dict, dict]:
         super().reset(seed=seed)
+
+        # Stop previous memory reader (if any) before starting new episode
+        if self._mem_reader is not None:
+            self._mem_reader.stop()
+        self._mem_reader = MemoryReader(container=self._container_name)
 
         try:
             ok = self._navigator.restart_game(timeout=20.0)
@@ -225,6 +233,20 @@ class HillClimbEnv(gym.Env):
             }
 
         state = self._vision.analyze(frame)
+
+        # MemoryReader: trigger scan at end of grace period (car is moving by now)
+        if (self._mem_reader is not None
+                and not self._mem_reader.is_active
+                and self._step_count == self._grace_period):
+            if not self._mem_reader.scan(timeout=10):
+                print(f"[ENV {self._serial}] MemoryReader scan failed — OCR fallback")
+                self._mem_reader = None
+
+        # MemoryReader: override OCR distance with memory-based distance
+        if self._mem_reader is not None and self._mem_reader.is_active:
+            car_state = self._mem_reader.read()
+            if car_state.valid:
+                state.distance_m = car_state.distance
 
         # Mid-race interruption: any non-RACING state that isn't a terminal
         # state means we left the race (OFFLINE popup, CAPTCHA, menu, etc.)
@@ -352,6 +374,9 @@ class HillClimbEnv(gym.Env):
 
     def _restart_container(self) -> None:
         """Restart the Docker container and reconnect ADB."""
+        if self._mem_reader is not None:
+            self._mem_reader.stop()
+            self._mem_reader = None
         print(f"[ENV {self._serial}] Restarting container {self._container_name}...")
         try:
             subprocess.run(
@@ -392,6 +417,9 @@ class HillClimbEnv(gym.Env):
         print(f"[ENV {self._serial}] Recovery complete")
 
     def close(self) -> None:
+        if self._mem_reader is not None:
+            self._mem_reader.stop()
+            self._mem_reader = None
         self._capture.close()
         self._controller.close()
         try:
