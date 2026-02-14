@@ -182,48 +182,45 @@ static int scan_structural(void) {
     return num_nodes;
 }
 
-/* Find the LIVE node: wait, then check which moved (delta > threshold) */
-static unsigned long find_live_node(int wait_sec) {
+/* Find the LIVE node via consensus: majority of car-part Nodes share the same
+ * pos_x (they all belong to the same car). Templates have different pos_x.
+ * No movement required — works even when car is stationary. */
+static unsigned long find_consensus_node(void) {
     if (num_nodes == 0) return 0;
+    if (num_nodes == 1) return node_addrs[0];
 
-    fprintf(stderr, "  %d Nodes found, waiting %ds for movement...\n",
-            num_nodes, wait_sec);
-
-    /* Record initial values */
-    float *vals1 = (float *)malloc(num_nodes * sizeof(float));
+    /* Re-read current pos_x for all nodes */
+    float vals[MAX_NODES];
     for (int i = 0; i < num_nodes; i++) {
-        pvm_read(pid_g, &vals1[i], 4, node_addrs[i]);
+        pvm_read(pid_g, &vals[i], 4, node_addrs[i]);
     }
 
-    sleep(wait_sec);
-
-    /* Find which moved */
-    unsigned long best = 0;
-    float best_delta = 0;
-    int n_moved = 0;
+    /* Find the pos_x value with most neighbors within tolerance */
+    float tolerance = 2.0f;
+    int best_count = 0;
+    int best_idx = 0;
 
     for (int i = 0; i < num_nodes; i++) {
-        float cur;
-        pvm_read(pid_g, &cur, 4, node_addrs[i]);
-        float delta = cur - vals1[i];
-        if (delta > 0.5f) {
-            n_moved++;
-            if (delta > best_delta) {
-                best = node_addrs[i];
-                best_delta = delta;
-            }
+        int count = 0;
+        for (int j = 0; j < num_nodes; j++) {
+            if (fabsf(vals[i] - vals[j]) < tolerance) count++;
+        }
+        if (count > best_count) {
+            best_count = count;
+            best_idx = i;
         }
     }
-    free(vals1);
 
-    fprintf(stderr, "  moved: %d / %d", n_moved, num_nodes);
-    if (best) {
-        fprintf(stderr, ", best=0x%lx Δ=%.2f\n", best, best_delta);
-    } else {
-        fprintf(stderr, "\n");
+    fprintf(stderr, "  consensus: %d/%d nodes at pos_x≈%.1f\n",
+            best_count, num_nodes, vals[best_idx]);
+
+    /* Need at least 3 nodes to agree */
+    if (best_count < 3) {
+        fprintf(stderr, "  no consensus (best cluster = %d)\n", best_count);
+        return 0;
     }
 
-    return best;
+    return node_addrs[best_idx];
 }
 
 /* Dump context around pos_x for debugging */
@@ -292,7 +289,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "  %d structural matches\n", n);
 
         if (n > 0) {
-            best_addr = find_live_node(wait_sec);
+            best_addr = find_consensus_node();
             if (best_addr) break;
         }
     }

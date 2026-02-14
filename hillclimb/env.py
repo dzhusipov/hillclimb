@@ -240,18 +240,20 @@ class HillClimbEnv(gym.Env):
 
         state = self._vision.analyze(frame)
 
-        # MemoryReader: launch background scan at grace_period (car confirmed moving)
+        # MemoryReader: launch background scan early (consensus doesn't need movement)
         if (self._mem_reader is not None
                 and not self._mem_reader.is_active
-                and self._step_count == self._grace_period
+                and self._step_count == 3
                 and state.game_state == GameState.RACING):
             reader = self._mem_reader
 
             def _bg_scan():
                 if self._mem_reader is not reader:
                     return
-                if not reader.scan(timeout=20):
-                    print(f"[ENV {self._serial}] MemoryReader scan failed — OCR fallback")
+                if reader.scan(timeout=15):
+                    print(f"[ENV {self._serial}] MemoryReader attached!", flush=True)
+                else:
+                    print(f"[ENV {self._serial}] MemoryReader scan failed — OCR fallback", flush=True)
                     if self._mem_reader is reader:
                         self._mem_reader = None
 
