@@ -39,6 +39,11 @@ class CarState:
     pos_y: float = 0.0
     vel_x: float = 0.0    # derived from delta pos_x / delta_t
     vel_y: float = 0.0    # derived from delta pos_y / delta_t
+    sin_rot: float = 0.0    # sin(rotation angle)
+    cos_rot: float = 1.0    # cos(rotation angle) — neutral = upright
+    vel_raw: float = 0.0    # raw velocity from engine (offset +4)
+    cos_tilt: float = 1.0   # cos(body tilt)
+    sin_tilt: float = 0.0   # sin(body tilt)
     timestamp: float = 0.0
     valid: bool = False
 
@@ -79,8 +84,15 @@ class MemoryReader:
         self._initial_y: float = 0.0
         self._last_x: float = 0.0
         self._last_y: float = 0.0
+        self._last_sin_rot: float = 0.0
+        self._last_cos_rot: float = 1.0
+        self._last_vel_raw: float = 0.0
+        self._last_cos_tilt: float = 1.0
+        self._last_sin_tilt: float = 0.0
         self._last_time: float = 0.0
         self._scanned: bool = False
+        self._proto_v2: bool = False
+        self._frame_size: int = 8  # bytes: 8 for v1 (2 floats), 28 for v2 (7 floats)
 
     @property
     def is_active(self) -> bool:
@@ -154,7 +166,13 @@ class MemoryReader:
                 self._kill()
                 return False
 
-            if header_str != "OK":
+            if header_str == "OK2":
+                self._proto_v2 = True
+                self._frame_size = 28  # 7 floats
+            elif header_str == "OK":
+                self._proto_v2 = False
+                self._frame_size = 8   # 2 floats
+            else:
                 logger.warning("Unexpected nodefinder header on %s: %r", self.container, header_str)
                 self._kill()
                 return False
@@ -191,35 +209,65 @@ class MemoryReader:
             return CarState()
 
         # Read all available samples, keep the latest
-        # Protocol: normal frame = 8 bytes [pos_x, pos_y]
-        #           switch marker = 12 bytes [NaN, new_initial_x, new_initial_y]
+        # v1: frame = 8 bytes [pos_x, pos_y], switch = 12 bytes [NaN, init_x, init_y]
+        # v2: frame = 28 bytes [pos_x, pos_y, sin_rot, cos_rot, vel_raw, cos_tilt, sin_tilt]
+        #     switch = 28 bytes [NaN, 0,0,0,0,0,0] + 28 bytes [init_x, init_y, 0,0,0,0,0]
         pos_x = None
         pos_y = None
+        sin_rot = 0.0
+        cos_rot = 1.0
+        vel_raw = 0.0
+        cos_tilt = 1.0
+        sin_tilt = 0.0
         now = time.monotonic()
 
         while True:
             ready, _, _ = select.select([self._proc.stdout], [], [], 0)
             if not ready:
                 break
-            data = self._proc.stdout.read(8)
-            if not data or len(data) < 8:
+            data = self._proc.stdout.read(self._frame_size)
+            if not data or len(data) < self._frame_size:
                 self._scanned = False
                 return CarState()
-            x, y = struct.unpack('<ff', data)
 
-            # NaN marker = address switch, next 4 bytes = new_initial_y
+            if self._proto_v2:
+                vals = struct.unpack('<fffffff', data)
+                x = vals[0]
+            else:
+                vals = struct.unpack('<ff', data)
+                x = vals[0]
+
+            # NaN marker = address switch
             if x != x:  # NaN check
-                extra = self._read_exact(4, timeout=1.0)
-                if extra and len(extra) == 4:
-                    new_initial_y = struct.unpack('<f', extra)[0]
-                    old_initial = self._initial_x
-                    self._initial_x = y  # "y" field carries new_initial_x
-                    self._initial_y = new_initial_y
-                    logger.info("MemoryReader: address switch, new initial=(%.1f, %.1f) old=%.1f",
-                                self._initial_x, self._initial_y, old_initial)
+                if self._proto_v2:
+                    # v2: next frame (28 bytes) contains new_initial_x, new_initial_y
+                    init_data = self._read_exact(self._frame_size, timeout=1.0)
+                    if init_data and len(init_data) == self._frame_size:
+                        init_vals = struct.unpack('<fffffff', init_data)
+                        old_initial = self._initial_x
+                        self._initial_x = init_vals[0]
+                        self._initial_y = init_vals[1]
+                        logger.info("MemoryReader: address switch, new initial=(%.1f, %.1f) old=%.1f",
+                                    self._initial_x, self._initial_y, old_initial)
+                else:
+                    # v1: NaN + new_initial_x already in vals[1], read 4 more bytes
+                    extra = self._read_exact(4, timeout=1.0)
+                    if extra and len(extra) == 4:
+                        new_initial_y = struct.unpack('<f', extra)[0]
+                        old_initial = self._initial_x
+                        self._initial_x = vals[1]
+                        self._initial_y = new_initial_y
+                        logger.info("MemoryReader: address switch, new initial=(%.1f, %.1f) old=%.1f",
+                                    self._initial_x, self._initial_y, old_initial)
                 continue
 
-            pos_x, pos_y = x, y
+            if self._proto_v2:
+                pos_x, pos_y = vals[0], vals[1]
+                sin_rot, cos_rot = vals[2], vals[3]
+                vel_raw = vals[4]
+                cos_tilt, sin_tilt = vals[5], vals[6]
+            else:
+                pos_x, pos_y = vals[0], vals[1]
 
         if pos_x is None:
             # No new data — return last known state
@@ -228,6 +276,11 @@ class MemoryReader:
                     pos_x=self._last_x,
                     pos_y=self._last_y,
                     vel_x=0.0, vel_y=0.0,
+                    sin_rot=self._last_sin_rot,
+                    cos_rot=self._last_cos_rot,
+                    vel_raw=self._last_vel_raw,
+                    cos_tilt=self._last_cos_tilt,
+                    sin_tilt=self._last_sin_tilt,
                     timestamp=self._last_time,
                     valid=True,
                     _initial_x=self._initial_x,
@@ -242,6 +295,11 @@ class MemoryReader:
 
         self._last_x = pos_x
         self._last_y = pos_y
+        self._last_sin_rot = sin_rot
+        self._last_cos_rot = cos_rot
+        self._last_vel_raw = vel_raw
+        self._last_cos_tilt = cos_tilt
+        self._last_sin_tilt = sin_tilt
         self._last_time = now
 
         return CarState(
@@ -249,6 +307,11 @@ class MemoryReader:
             pos_y=pos_y,
             vel_x=vel_x,
             vel_y=vel_y,
+            sin_rot=sin_rot,
+            cos_rot=cos_rot,
+            vel_raw=vel_raw,
+            cos_tilt=cos_tilt,
+            sin_tilt=sin_tilt,
             timestamp=now,
             valid=True,
             _initial_x=self._initial_x,
@@ -259,10 +322,17 @@ class MemoryReader:
         self._kill()
         self._scanned = False
         self._pid = None
+        self._proto_v2 = False
+        self._frame_size = 8
         self._initial_x = 0.0
         self._initial_y = 0.0
         self._last_x = 0.0
         self._last_y = 0.0
+        self._last_sin_rot = 0.0
+        self._last_cos_rot = 1.0
+        self._last_vel_raw = 0.0
+        self._last_cos_tilt = 1.0
+        self._last_sin_tilt = 0.0
         self._last_time = 0.0
 
     def _kill(self):
@@ -308,8 +378,11 @@ if __name__ == "__main__":
         print("Failed to scan. Is the game in RACING state with car moving?")
         sys.exit(1)
 
-    print(f"Streaming! initial=({reader._initial_x:.1f}, {reader._initial_y:.1f})")
-    print(f"{'time':>8s} {'pos_x':>10s} {'pos_y':>10s} {'vel_x':>8s} {'vel_y':>8s} {'dist':>8s} {'speed':>8s}")
+    proto = "v2" if reader._proto_v2 else "v1"
+    print(f"Streaming ({proto})! initial=({reader._initial_x:.1f}, {reader._initial_y:.1f})")
+    print(f"{'time':>8s} {'pos_x':>10s} {'pos_y':>10s} {'vel_x':>8s} {'vel_y':>8s} "
+          f"{'dist':>8s} {'speed':>8s} {'sin_r':>7s} {'cos_r':>7s} {'vel_r':>7s} "
+          f"{'cos_t':>7s} {'sin_t':>7s}")
 
     try:
         t0 = time.monotonic()
@@ -319,7 +392,9 @@ if __name__ == "__main__":
                 elapsed = time.monotonic() - t0
                 print(f"{elapsed:8.2f} {state.pos_x:10.2f} {state.pos_y:10.2f} "
                       f"{state.vel_x:8.2f} {state.vel_y:8.2f} "
-                      f"{state.distance:8.1f} {state.speed:8.2f}")
+                      f"{state.distance:8.1f} {state.speed:8.2f} "
+                      f"{state.sin_rot:7.3f} {state.cos_rot:7.3f} {state.vel_raw:7.2f} "
+                      f"{state.cos_tilt:7.3f} {state.sin_tilt:7.3f}")
             time.sleep(0.1)
     except KeyboardInterrupt:
         print("\nStopped.")

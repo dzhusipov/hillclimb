@@ -223,7 +223,7 @@ def train(
     print(f"Training for {total_timesteps} timesteps (n_steps={n_steps}, batch={batch_size})")
     print(f"Config: lr={cfg.learning_rate}, envs={num_envs}, rollout={effective_rollout}")
     print(f"PPO: n_epochs={cfg.n_epochs}, gamma={cfg.gamma}, clip={cfg.clip_range}, ent={cfg.ent_coef}")
-    print(f"Obs: image(84,84,{cfg.n_stack}) + vector({6 * cfg.n_stack},) | Policy: MultiInputPolicy")
+    print(f"Obs: image(84,84,{cfg.n_stack}) + vector({11 * cfg.n_stack},) | Policy: MultiInputPolicy")
     print(f"Actions: Discrete(3) — 0=nothing, 1=gas, 2=brake | hold={cfg.action_hold_ms}ms")
     print("-" * 70)
 

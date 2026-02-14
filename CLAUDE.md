@@ -270,8 +270,8 @@ HCR2 использует Cocos2d-x / Box2D. Позиция машины хра�
    - Car body markers: ±0.7071 в оффсетах +96, +100
    - pos_Y duplicate: значения в оффсетах -36 и -32 совпадают
 4. Находит ~23 совпадения (все Node объекты car body)
-5. **Delta filter**: ждёт 2с, перечитывает pos_x → кто сдвинулся = live Node
-6. Выбирает единственный движущийся Node → стримит pos_x/pos_y по stdout
+5. **Consensus filter**: большинство Nodes (~21/23) имеют одинаковый pos_x — это live car
+6. Стримит 7 float per frame (pos_x, pos_y, sin_rot, cos_rot, vel_raw, cos_tilt, sin_tilt)
 
 **Layout Node от pos_x (оффсет +0):**
 ```
@@ -288,25 +288,43 @@ HCR2 использует Cocos2d-x / Box2D. Позиция машины хра�
 [+108]:     pos_X COPY (≈ pos_x)
 ```
 
-**Протокол stdout (binary):**
-- Header: `"OK\n"` + 8 bytes `[initial_x, initial_y]` (2 × float32 LE)
-- Frames: 8 bytes `[pos_x, pos_y]` каждые `interval_ms`
-- Address switch: `[NaN, new_initial_x]` + 4 bytes `[new_initial_y]` (12 bytes)
-- При ошибке: `"ERR:message\n"` вместо `"OK\n"`
+**Протокол v2 stdout (binary):**
+- Header: `"OK2\n"` + 8 bytes `[initial_x, initial_y]` (2 × float32 LE)
+- Frames: 28 bytes `[pos_x, pos_y, sin_rot, cos_rot, vel_raw, cos_tilt, sin_tilt]` (7 × float32)
+- Address switch: 28 bytes `[NaN, 0,0,0,0,0,0]` + 28 bytes `[new_init_x, new_init_y, 0,0,0,0,0]`
+- При ошибке: `"ERR:message\n"` вместо `"OK2\n"`
+- Обратная совместимость: MemoryReader поддерживает `"OK\n"` (v1, 8 bytes/frame)
 
 **Distance = pos_x - initial_x** (в мировых координатах ≈ метрам в игре)
 
 **Python обёртка:** `hillclimb/memory_reader.py` — MemoryReader class
-- `scan(timeout=10)` — запускает nodefinder, читает header
-- `read()` — неблокирующее чтение последнего pos_x/pos_y из pipe
+- `scan(timeout=10)` — запускает nodefinder, читает header (автодетект v1/v2)
+- `read()` → `CarState` с pos_x, pos_y, sin_rot, cos_rot, vel_raw, cos_tilt, sin_tilt
 - `is_active` — True если nodefinder жив и стримит
 - `stop()` — убивает nodefinder subprocess
 
 **Интеграция в env.py:**
-- Scan запускается в фоновом потоке через 8с после reset() (чтобы машина уже ехала)
-- Training loop не блокируется — первые ~8-12с используется OCR distance
-- Когда scan завершается → `state.distance_m` переключается на memory-based
-- При неудаче scan — автоматический fallback на OCR
+- Scan запускается в фоновом потоке на step 3 (consensus не требует движения)
+- Training loop не блокируется — первые шаги используют OCR distance + нейтральные physics
+- Когда scan завершается → `state.distance_m` + physics переключаются на memory-based
+- При неудаче scan — автоматический fallback на OCR, physics = neutral defaults
+
+**Observation vector (11 float):**
+| Index | Поле | Источник | Диапазон |
+|-------|------|----------|----------|
+| 0 | fuel | vision (gauge) | [0, 1] |
+| 1 | distance_m | memory/OCR | [0, 10000] |
+| 2 | speed (rpm) | vision (dial) | [0, 1] |
+| 3 | fuel_delta | computed | [-1, 1] |
+| 4 | distance_delta | computed | [-100, 100] |
+| 5 | time_since_progress | computed | [0, 300] |
+| 6 | vel_raw | memory (+4) | [-50, 50] |
+| 7 | sin_rot | memory (-20) | [-1, 1] |
+| 8 | cos_rot | memory (-16) | [-1, 1] |
+| 9 | sin_tilt | memory (+64) | [-1, 1] |
+| 10 | cos_tilt | memory (+60) | [-1, 1] |
+
+С VecFrameStack(n_stack=4): 11 × 4 = 44 float total.
 
 **Античит:**
 - `process_vm_readv` ≤ 70MB за вызов: БЕЗОПАСНО
@@ -316,12 +334,11 @@ HCR2 использует Cocos2d-x / Box2D. Позиция машины хра�
 
 **Деплой nodefinder на эмуляторы:**
 ```bash
-# Компиляция (один раз, на хосте или в любом arm64 окружении):
-gcc -O2 -static -o nodefinder scripts/nodefinder.c
+# Компиляция:
+gcc -O2 -static -o scripts/nodefinder scripts/nodefinder.c -lm
 
 # Деплой на все эмуляторы:
 for i in $(seq 0 7); do
-  docker cp nodefinder hcr2-$i:/data/local/tmp/nodefinder
-  docker exec hcr2-$i chmod +x /data/local/tmp/nodefinder
+  docker cp scripts/nodefinder hcr2-$i:/data/local/tmp/nodefinder
 done
 ```

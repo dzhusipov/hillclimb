@@ -17,10 +17,10 @@
  *   [+96]: -0.707, [+100]: 0.707
  *   [+108]: pos_X copy
  *
- * Protocol (stdout, binary) — compatible with memstream:
- *   Header: "OK\n" + initial_x(f32) + initial_y(f32)
- *   Normal: pos_x(f32) + pos_y(f32)                    [8 bytes]
- *   Switch: NaN(f32) + new_initial_x(f32) + new_initial_y(f32) [12 bytes]
+ * Protocol v2 (stdout, binary):
+ *   Header: "OK2\n" + initial_x(f32) + initial_y(f32)
+ *   Normal: 7 floats [pos_x, pos_y, sin_rot, cos_rot, vel_raw, cos_tilt, sin_tilt] = 28 bytes
+ *   Switch: NaN + 6 zeros (28 bytes), then new_initial_x + new_initial_y + 5 zeros (28 bytes)
  *
  * Usage: nodefinder <pid> [interval_ms] [max_sec] [--wait=N]
  */
@@ -43,10 +43,17 @@ static char buf1[MAX_REGION];
 #define MAX_SCAN_RETRIES 3
 
 /* Cocos2d-x Node offsets from pos_x */
-#define NODE_POSY_OFF  (-32)
-#define NODE_COPY_OFF  108
-#define NODE_COS45_OFF 96
-#define NODE_SIN45_OFF 100
+#define NODE_POSY_OFF   (-32)
+#define NODE_SINROT_OFF (-20)
+#define NODE_COSROT_OFF (-16)
+#define NODE_VEL_OFF      4
+#define NODE_COSTILT_OFF 60
+#define NODE_SINTILT_OFF 64
+#define NODE_COPY_OFF   108
+#define NODE_COS45_OFF   96
+#define NODE_SIN45_OFF  100
+
+#define FRAME_FLOATS 7
 
 static const float SCALE_ONE = 1.0f;
 static const float COS45 = 0.70710678f;  /* cos(45°) = sin(45°) */
@@ -314,8 +321,8 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Streaming: pos_x=%.2f pos_y=%.2f addr=0x%lx\n",
             initial_x, initial_y, best_addr);
 
-    /* Output header (protocol-compatible with memstream) */
-    fprintf(stdout, "OK\n");
+    /* Output header (protocol v2) */
+    fprintf(stdout, "OK2\n");
     fwrite(&initial_x, sizeof(float), 1, stdout);
     fwrite(&initial_y, sizeof(float), 1, stdout);
     fflush(stdout);
@@ -333,6 +340,14 @@ int main(int argc, char *argv[]) {
             break;
         if (pvm_read(pid_g, &pos_y, 4, best_addr + NODE_POSY_OFF) != 4)
             break;
+
+        /* Read extended physics data */
+        float sin_rot, cos_rot, vel_raw, cos_tilt, sin_tilt;
+        pvm_read(pid_g, &sin_rot,  4, best_addr + NODE_SINROT_OFF);
+        pvm_read(pid_g, &cos_rot,  4, best_addr + NODE_COSROT_OFF);
+        pvm_read(pid_g, &vel_raw,  4, best_addr + NODE_VEL_OFF);
+        pvm_read(pid_g, &cos_tilt, 4, best_addr + NODE_COSTILT_OFF);
+        pvm_read(pid_g, &sin_tilt, 4, best_addr + NODE_SINTILT_OFF);
 
         double now = now_ms();
 
@@ -384,25 +399,37 @@ int main(int argc, char *argv[]) {
                         fprintf(stderr, "  switch: 0x%lx→0x%lx pos_x=%.1f→%.1f\n",
                                 best_addr, new_addr, pos_x, new_x);
                         best_addr = new_addr;
-                        pos_x = new_x;
-                        pos_y = new_y;
-                        last_x = pos_x;
+                        last_x = new_x;
                         last_change_ms = now;
                         consecutive_stale = 0;
 
-                        /* NaN marker + new initial (protocol-compatible) */
-                        float nan_marker = 0.0f / 0.0f;
-                        float new_initial[2] = {new_x, new_y};
-                        fwrite(&nan_marker, sizeof(float), 1, stdout);
-                        fwrite(new_initial, sizeof(float), 2, stdout);
+                        /* Switch marker: NaN + 6 zeros (28 bytes) */
+                        float switch_frame[FRAME_FLOATS] = {0};
+                        switch_frame[0] = 0.0f / 0.0f;  /* NaN */
+                        fwrite(switch_frame, sizeof(float), FRAME_FLOATS, stdout);
+
+                        /* New initial: new_x, new_y, 5 zeros (28 bytes) */
+                        float init_frame[FRAME_FLOATS] = {0};
+                        init_frame[0] = new_x;
+                        init_frame[1] = new_y;
+                        fwrite(init_frame, sizeof(float), FRAME_FLOATS, stdout);
                         fflush(stdout);
+
+                        /* Re-read physics for new addr */
+                        pvm_read(pid_g, &sin_rot,  4, best_addr + NODE_SINROT_OFF);
+                        pvm_read(pid_g, &cos_rot,  4, best_addr + NODE_COSROT_OFF);
+                        pvm_read(pid_g, &vel_raw,  4, best_addr + NODE_VEL_OFF);
+                        pvm_read(pid_g, &cos_tilt, 4, best_addr + NODE_COSTILT_OFF);
+                        pvm_read(pid_g, &sin_tilt, 4, best_addr + NODE_SINTILT_OFF);
+                        pvm_read(pid_g, &pos_x, 4, best_addr);
+                        pvm_read(pid_g, &pos_y, 4, best_addr + NODE_POSY_OFF);
                     }
                 }
             }
         }
 
-        float frame[2] = {pos_x, pos_y};
-        fwrite(frame, sizeof(float), 2, stdout);
+        float frame[FRAME_FLOATS] = {pos_x, pos_y, sin_rot, cos_rot, vel_raw, cos_tilt, sin_tilt};
+        fwrite(frame, sizeof(float), FRAME_FLOATS, stdout);
         fflush(stdout);
 
         if ((now - t_start) > max_sec * 1000.0)

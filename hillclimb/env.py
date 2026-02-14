@@ -55,8 +55,8 @@ class HillClimbEnv(gym.Env):
         self.observation_space = spaces.Dict({
             "image": spaces.Box(0, 255, shape=(size, size, 1), dtype=np.uint8),
             "vector": spaces.Box(
-                low=np.array([0.0, 0.0, 0.0, -1.0, -100.0, 0.0], dtype=np.float32),
-                high=np.array([1.0, 10000.0, 1.0, 1.0, 100.0, 300.0], dtype=np.float32),
+                low=np.array([0, 0, 0, -1, -100, 0, -50, -1, -1, -1, -1], dtype=np.float32),
+                high=np.array([1, 10000, 1, 1, 100, 300, 50, 1, 1, 1, 1], dtype=np.float32),
                 dtype=np.float32,
             ),
         })
@@ -96,6 +96,7 @@ class HillClimbEnv(gym.Env):
 
         self._mem_reader: MemoryReader | None = None
         self._mem_scan_thread: threading.Thread | None = None
+        self._last_car_state = None  # CarState from MemoryReader
 
         self._prev_state: VisionState | None = None
         self._step_count = 0
@@ -126,6 +127,7 @@ class HillClimbEnv(gym.Env):
         if self._mem_reader is not None:
             self._mem_reader.stop()
             self._mem_reader = None
+        self._last_car_state = None
 
         try:
             ok = self._navigator.restart_game(timeout=20.0)
@@ -265,6 +267,7 @@ class HillClimbEnv(gym.Env):
             car_state = self._mem_reader.read()
             if car_state.valid:
                 state.distance_m = car_state.distance
+                self._last_car_state = car_state
 
         # Mid-race interruption: any non-RACING state that isn't a terminal
         # state means we left the race (OFFLINE popup, CAPTCHA, menu, etc.)
@@ -363,6 +366,17 @@ class HillClimbEnv(gym.Env):
         # Speed: use RPM as proxy (more reliable than optical flow)
         speed = state.rpm
 
+        # Extended physics from MemoryReader (or neutral defaults)
+        if self._last_car_state and self._last_car_state.valid:
+            cs = self._last_car_state
+            vel_raw = cs.vel_raw
+            sin_rot, cos_rot = cs.sin_rot, cs.cos_rot
+            sin_tilt, cos_tilt = cs.sin_tilt, cs.cos_tilt
+        else:
+            vel_raw = 0.0
+            sin_rot, cos_rot = 0.0, 1.0
+            sin_tilt, cos_tilt = 0.0, 1.0
+
         vector = np.array([
             state.fuel,
             state.distance_m,
@@ -370,6 +384,11 @@ class HillClimbEnv(gym.Env):
             fuel_delta,
             distance_delta,
             time_since_progress,
+            vel_raw,
+            sin_rot,
+            cos_rot,
+            sin_tilt,
+            cos_tilt,
         ], dtype=np.float32)
 
         # Update tracking
@@ -383,7 +402,7 @@ class HillClimbEnv(gym.Env):
         size = cfg.game_field_size
         return {
             "image": np.zeros((size, size, 1), dtype=np.uint8),
-            "vector": np.zeros(6, dtype=np.float32),
+            "vector": np.zeros(11, dtype=np.float32),
         }
 
     # ------------------------------------------------------------------
