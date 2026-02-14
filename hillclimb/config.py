@@ -143,7 +143,8 @@ class Config:
     game_field_roi: Rect = field(default_factory=lambda: Rect(x=0, y=30, w=800, h=310))
     game_field_size: int = 84
     n_stack: int = 4
-    max_episode_steps: int = 3000
+    max_episode_steps: int = 1000
+    action_repeat: int = 3
 
     # -- Logging --------------------------------------------------------------
     log_dir: str = "logs"
@@ -152,14 +153,14 @@ class Config:
     # -- RL training ----------------------------------------------------------
     model_dir: str = "models"
     learning_rate: float = 3e-4
-    batch_size: int = 256
-    n_steps: int = 512
+    batch_size: int = 512
+    n_steps: int = 256
     total_timesteps: int = 10_000_000
-    n_epochs: int = 4
+    n_epochs: int = 8
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_range: float = 0.2
-    ent_coef: float = 0.01
+    ent_coef: float = 0.03
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
 

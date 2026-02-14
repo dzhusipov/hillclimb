@@ -16,4 +16,4 @@ docker/.env
 capture_test.png
 demos/
 vendor/*.jar
-vendor/*.jar
+hillclimb-bot/

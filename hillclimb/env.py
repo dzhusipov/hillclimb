@@ -27,13 +27,17 @@ class HillClimbEnv(gym.Env):
     Action: Discrete(3)
         0 = nothing, 1 = gas, 2 = brake
 
-    Reward:
-        +distance_delta * 1.0 (main signal, clamped 5m/step)
-        +speed * 0.1 (RPM proxy, dense signal)
-        -10.0 if crashed
-        +0.5 if fuel picked up
-        -0.05 * (0.2 - fuel) / 0.2 when fuel < 0.2
-        -0.1 if stalled (no progress while RACING)
+    Reward v2:
+        +1.0/step alive bonus (main dense signal)
+        +0.5 * distance_delta (OCR, clamped 5m)
+        +0.05 * rpm (small speed bonus)
+        +2.0 fuel pickup
+        crash: -2.0 + dist*0.05 (proportional)
+        fuel-out: -1.0 + dist*0.05
+        results: +dist*0.05
+
+    Action repeat: each step repeats the action 3 times (frame skip).
+    Grace period: first 15 steps cannot terminate (vision false positives).
     """
 
     metadata = {"render_modes": ["human"]}
@@ -96,6 +100,10 @@ class HillClimbEnv(gym.Env):
         self._prev_fuel = 1.0
         self._last_progress_time = 0.0
         self._episode_start_time = 0.0
+        # Grace period: ignore terminal states for first N steps (vision false positives)
+        self._grace_period = 15
+        # Action repeat (frame skip): repeat each action N times
+        self._action_repeat = cfg.action_repeat
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -122,11 +130,21 @@ class HillClimbEnv(gym.Env):
             except Exception:
                 print(f"[ENV {self._serial}] Still failing after container restart")
 
-        time.sleep(0.5)
+        # Poll until we are in RACING (up to 5 attempts, ~2.5s)
+        frame = None
+        state = None
+        for attempt in range(5):
+            time.sleep(0.5)
+            try:
+                frame = self._capture.capture()
+                state = self._vision.analyze(frame)
+                if state.game_state == GameState.RACING:
+                    break
+            except (RuntimeError, Exception):
+                frame = None
+                state = None
 
-        try:
-            frame = self._capture.capture()
-        except (RuntimeError, Exception):
+        if frame is None or state is None:
             self._prev_state = None
             self._step_count = 0
             self._max_distance_m = 0.0
@@ -136,11 +154,11 @@ class HillClimbEnv(gym.Env):
             self._last_progress_time = time.time()
             return self._zero_obs(), {}
 
-        state = self._vision.analyze(frame)
         self._prev_state = state
         self._step_count = 0
         self._max_distance_m = 0.0
-        self._prev_distance_m = state.distance_m
+        # Reset to 0 — don't carry stale OCR values from previous episode
+        self._prev_distance_m = 0.0
         self._prev_fuel = state.fuel
         self._episode_start_time = time.time()
         self._last_progress_time = time.time()
@@ -150,6 +168,33 @@ class HillClimbEnv(gym.Env):
     def step(
         self, action: int | np.ndarray,
     ) -> tuple[dict, float, bool, bool, dict]:
+        """Execute action with action repeat (frame skip).
+
+        Repeats the same action `_action_repeat` times, accumulating reward.
+        Returns the observation from the last sub-step.
+        """
+        total_reward = 0.0
+        obs = self._prev_obs if hasattr(self, '_prev_obs') else self._zero_obs()
+        terminated = False
+        truncated = False
+        info: dict = {}
+
+        for repeat_i in range(self._action_repeat):
+            obs_i, reward_i, terminated_i, truncated_i, info_i = self._single_step(action)
+            total_reward += reward_i
+            obs = obs_i
+            info = info_i
+            terminated = terminated_i
+            truncated = truncated_i
+            if terminated or truncated:
+                break
+
+        return obs, total_reward, terminated, truncated, info
+
+    def _single_step(
+        self, action: int | np.ndarray,
+    ) -> tuple[dict, float, bool, bool, dict]:
+        """Execute one atomic step (action + capture + reward)."""
         self._step_count += 1
 
         action_enum = Action(int(action))
@@ -204,15 +249,26 @@ class HillClimbEnv(gym.Env):
                     "step": self._step_count,
                 }
 
-        reward = self._compute_reward(self._prev_state, state)
-        obs = self._build_obs(frame, state)
-
         # Episode termination — only explicit crash/end states
-        terminated = state.game_state in (
+        is_terminal = state.game_state in (
             GameState.DRIVER_DOWN,
             GameState.TOUCH_TO_CONTINUE,
             GameState.RESULTS,
         )
+
+        # Grace period: suppress termination AND crash penalty during first N steps
+        # (vision false positives on first frames after race start)
+        in_grace = self._step_count < self._grace_period
+        if is_terminal and in_grace:
+            # Treat false terminal as RACING: give alive bonus instead of crash penalty
+            reward = 1.0
+            terminated = False
+        else:
+            reward = self._compute_reward(self._prev_state, state, self._max_distance_m)
+            terminated = is_terminal
+
+        obs = self._build_obs(frame, state)
+
         truncated = False
 
         # UNKNOWN — try to navigate back, don't kill episode
@@ -352,37 +408,48 @@ class HillClimbEnv(gym.Env):
     def _compute_reward(
         prev: VisionState | None,
         curr: VisionState,
+        max_distance_m: float = 0.0,
     ) -> float:
-        reward = 0.0
+        """Reward v2: alive bonus is the primary dense signal.
 
-        # Crash penalty
-        if curr.game_state in (GameState.DRIVER_DOWN, GameState.TOUCH_TO_CONTINUE):
-            return -10.0
+        Components:
+            +1.0/step alive (RACING)
+            +0.5 * distance_delta (OCR, clamped 5m)
+            +0.05 * rpm (small speed bonus)
+            +2.0 fuel pickup
+            DRIVER_DOWN: -2.0 + dist*0.05 (proportional — far crash less bad)
+            TOUCH_TO_CONTINUE: -1.0 + dist*0.05 (fuel-out, not crash)
+            RESULTS: +dist*0.05 (completed episode bonus)
+        """
+        dist = max_distance_m
+
+        # --- Terminal states ---
+        if curr.game_state == GameState.DRIVER_DOWN:
+            return -2.0 + dist * 0.05
+
+        if curr.game_state == GameState.TOUCH_TO_CONTINUE:
+            return -1.0 + dist * 0.05
+
+        if curr.game_state == GameState.RESULTS:
+            return dist * 0.05
 
         if curr.game_state != GameState.RACING:
             return 0.0
 
-        # === Primary: distance gained (via OCR) ===
+        # --- RACING: dense reward ---
+        reward = 1.0  # alive bonus
+
+        # Distance delta (OCR)
         if prev is not None and prev.distance_m > 0 and curr.distance_m > prev.distance_m:
             delta = curr.distance_m - prev.distance_m
-            delta = min(delta, 5.0)  # clamp per-step delta to ±5m (OCR noise filter)
-            reward += 1.0 * delta
+            delta = min(delta, 5.0)
+            reward += 0.5 * delta
 
-        # === Speed bonus (dense signal, RPM proxy) ===
-        reward += 0.1 * curr.rpm
+        # Speed bonus (RPM proxy)
+        reward += 0.05 * curr.rpm
 
-        # === Fuel pickup bonus ===
+        # Fuel pickup bonus
         if prev is not None and curr.fuel > prev.fuel + 0.02:
-            reward += 0.5
-
-        # === Low fuel penalty ===
-        if curr.fuel < 0.2:
-            reward -= 0.05 * (0.2 - curr.fuel) / 0.2
-
-        # === Stall penalty (no distance gain while racing) ===
-        if prev is not None and prev.game_state == GameState.RACING:
-            delta = curr.distance_m - prev.distance_m
-            if abs(delta) < 0.5:
-                reward -= 0.1
+            reward += 2.0
 
         return reward

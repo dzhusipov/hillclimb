@@ -229,6 +229,7 @@ def train(
 
     save_path = model_dir / "ppo_hillclimb"
 
+    completed_normally = False
     try:
         model.learn(
             total_timesteps=total_timesteps,
@@ -236,6 +237,7 @@ def train(
             progress_bar=True,
         )
         print("\nTraining complete.")
+        completed_normally = True
     except KeyboardInterrupt:
         print("\n\nCtrl+C — saving model before exit...")
     except Exception as exc:
@@ -250,8 +252,12 @@ def train(
     env.save(str(vec_norm_path))
     print(f"VecNormalize stats saved to {vec_norm_path}")
 
-    # Mark training as inactive
-    _write_status({"training_active": False, "last_update": time.time()})
+    # Mark training as inactive (with completion flag for Telegram bot)
+    _write_status({
+        "training_active": False,
+        "training_completed": completed_normally,
+        "last_update": time.time(),
+    })
 
     env.close()
 
