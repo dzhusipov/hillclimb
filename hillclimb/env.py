@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 import time
 
 import gymnasium as gym
@@ -94,6 +95,7 @@ class HillClimbEnv(gym.Env):
         )
 
         self._mem_reader: MemoryReader | None = None
+        self._mem_scan_thread: threading.Thread | None = None
 
         self._prev_state: VisionState | None = None
         self._step_count = 0
@@ -123,7 +125,7 @@ class HillClimbEnv(gym.Env):
         # Stop previous memory reader (if any) before starting new episode
         if self._mem_reader is not None:
             self._mem_reader.stop()
-        self._mem_reader = MemoryReader(container=self._container_name)
+            self._mem_reader = None
 
         try:
             ok = self._navigator.restart_game(timeout=20.0)
@@ -170,6 +172,25 @@ class HillClimbEnv(gym.Env):
         self._prev_fuel = state.fuel
         self._episode_start_time = time.time()
         self._last_progress_time = time.time()
+
+        # Launch MemoryReader scan in background thread.
+        # Delay 8s so the car is moving by the time nodefinder checks delta.
+        # Training loop continues normally with OCR; switches to memory once ready.
+        self._mem_reader = MemoryReader(container=self._container_name)
+        reader = self._mem_reader  # capture for closure
+
+        def _bg_scan():
+            time.sleep(8)
+            # Check reader is still the current one (not replaced by next reset)
+            if self._mem_reader is not reader:
+                return
+            if not reader.scan(timeout=10):
+                print(f"[ENV {self._serial}] MemoryReader scan failed — OCR fallback")
+                if self._mem_reader is reader:
+                    self._mem_reader = None
+
+        self._mem_scan_thread = threading.Thread(target=_bg_scan, daemon=True)
+        self._mem_scan_thread.start()
 
         return self._build_obs(frame, state), {}
 
@@ -233,14 +254,6 @@ class HillClimbEnv(gym.Env):
             }
 
         state = self._vision.analyze(frame)
-
-        # MemoryReader: trigger scan at end of grace period (car is moving by now)
-        if (self._mem_reader is not None
-                and not self._mem_reader.is_active
-                and self._step_count == self._grace_period):
-            if not self._mem_reader.scan(timeout=10):
-                print(f"[ENV {self._serial}] MemoryReader scan failed — OCR fallback")
-                self._mem_reader = None
 
         # MemoryReader: override OCR distance with memory-based distance
         if self._mem_reader is not None and self._mem_reader.is_active:
