@@ -196,12 +196,14 @@ hillclimb/
 │   ├── agent_rules.py        — rule-based baseline агент
 │   ├── agent_rl.py           — RL агент (PPO)
 │   ├── env.py                — Gymnasium HCR2Env
+│   ├── memory_reader.py      — чтение позиции из памяти (nodefinder pipe)
 │   ├── game_loop.py          — основной цикл: capture → CV → agent → input
 │   ├── logger.py             — CSV лог + PNG кадры
 │   ├── calibrate.py          — интерактивная калибровка ROI
 │   └── train.py              — обучение PPO
 ├── scripts/
-│   └── manage.sh             — start/stop/restart/install-apk
+│   ├── manage.sh             — start/stop/restart/install-apk
+│   └── nodefinder.c          — C утилита поиска Node в памяти HCR2
 ├── tests/
 │   └── test_vision.py        — тесты CV модуля
 ├── models/                   — RL модели (gitignored)
@@ -240,6 +242,54 @@ Discrete(3): `0=nothing, 1=gas, 2=brake`
 - **Hardware Acceleration:** PyTorch CUDA (RTX 3090)
 - **Web Dashboard:** FastAPI + Snapshot Polling (800мс)
 - **Monitoring:** ws-scrcpy, CasaOS
+
+## Чтение памяти (Memory Reader)
+
+Помимо визуального анализа (OCR дистанции), агент читает позицию машины напрямую из памяти игрового процесса — это точнее и быстрее.
+
+### Как это работает
+
+HCR2 построена на Cocos2d-x / Box2D. Позиция машины хранится в `Node` объекте внутри heap-региона `[anon:scudo:primary]` (~22 MB). Утилита `nodefinder` (C, статическая компиляция) сканирует этот регион и находит нужный Node через структурный паттерн:
+
+1. **Скан** — читаем весь регион (~22 MB) через `process_vm_readv`
+2. **Структурный поиск** — ищем Node по 5 признакам: scale [1,1,1], rotation sin²+cos²=1, pos_X copy на +108, car body markers ±0.7071 на +96/+100, дупликат pos_Y
+3. **Delta filter** — ждём 2с, перечитываем — кто сдвинулся = живой Node машины
+4. **Стриминг** — непрерывно выдаём pos_x / pos_y (float32) по stdout pipe
+
+### Что читаем
+
+| Параметр | Оффсет | Описание |
+|----------|--------|----------|
+| pos_X | +0 | Мировая X-координата машины (≈ метры) |
+| pos_Y | -36 / -32 | Высота машины (дублируется) |
+| rotation | -20 / -16 | sin / cos угла поворота |
+| tilt | +60 / +64 | cos / sin наклона кузова |
+| scale | -12 / -8 / -4 | Масштаб X/Y/Z (всегда 1.0) |
+
+**Дистанция** = `pos_x - initial_x` (начальная позиция фиксируется при старте гонки).
+
+### Интеграция в обучение
+
+`MemoryReader` (`hillclimb/memory_reader.py`) запускается в фоновом потоке при каждом reset(). Через ~8 секунд (когда машина уже едет) nodefinder завершает скан и начинает стриминг. До этого момента используется OCR distance как fallback. После подключения — `state.distance_m` перезаписывается точным значением из памяти.
+
+### Безопасность
+
+- `process_vm_readv` ≤ 70 MB за вызов — безопасно (скан 22 MB ниже лимита)
+- 160 MB+ — крашит игру (Android SIGKILL по античиту)
+- Точечные чтения (4-8 байт) — без ограничений
+
+### Деплой
+
+```bash
+# Компиляция
+gcc -O2 -static -o nodefinder scripts/nodefinder.c
+
+# На все эмуляторы
+for i in $(seq 0 7); do
+  docker cp nodefinder hcr2-$i:/data/local/tmp/
+  docker exec hcr2-$i chmod +x /data/local/tmp/nodefinder
+done
+```
 
 ## Тесты
 

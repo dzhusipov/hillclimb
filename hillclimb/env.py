@@ -173,24 +173,9 @@ class HillClimbEnv(gym.Env):
         self._episode_start_time = time.time()
         self._last_progress_time = time.time()
 
-        # Launch MemoryReader scan in background thread.
-        # Delay 8s so the car is moving by the time nodefinder checks delta.
-        # Training loop continues normally with OCR; switches to memory once ready.
+        # Create MemoryReader — scan will be triggered from _single_step
+        # at grace_period when car is confirmed moving.
         self._mem_reader = MemoryReader(container=self._container_name)
-        reader = self._mem_reader  # capture for closure
-
-        def _bg_scan():
-            time.sleep(8)
-            # Check reader is still the current one (not replaced by next reset)
-            if self._mem_reader is not reader:
-                return
-            if not reader.scan(timeout=10):
-                print(f"[ENV {self._serial}] MemoryReader scan failed — OCR fallback")
-                if self._mem_reader is reader:
-                    self._mem_reader = None
-
-        self._mem_scan_thread = threading.Thread(target=_bg_scan, daemon=True)
-        self._mem_scan_thread.start()
 
         return self._build_obs(frame, state), {}
 
@@ -254,6 +239,24 @@ class HillClimbEnv(gym.Env):
             }
 
         state = self._vision.analyze(frame)
+
+        # MemoryReader: launch background scan at grace_period (car confirmed moving)
+        if (self._mem_reader is not None
+                and not self._mem_reader.is_active
+                and self._step_count == self._grace_period
+                and state.game_state == GameState.RACING):
+            reader = self._mem_reader
+
+            def _bg_scan():
+                if self._mem_reader is not reader:
+                    return
+                if not reader.scan(timeout=20):
+                    print(f"[ENV {self._serial}] MemoryReader scan failed — OCR fallback")
+                    if self._mem_reader is reader:
+                        self._mem_reader = None
+
+            self._mem_scan_thread = threading.Thread(target=_bg_scan, daemon=True)
+            self._mem_scan_thread.start()
 
         # MemoryReader: override OCR distance with memory-based distance
         if self._mem_reader is not None and self._mem_reader.is_active:

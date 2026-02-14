@@ -156,12 +156,14 @@ hillclimb/
 │   ├── agent_rules.py        — rule-based baseline агент
 │   ├── agent_rl.py           — RL агент (обёртка над PPO)
 │   ├── env.py                — Gymnasium environment
+│   ├── memory_reader.py      — чтение позиции из памяти (nodefinder pipe)
 │   ├── game_loop.py          — основной цикл capture→CV→agent→input
 │   ├── logger.py             — CSV лог + PNG кадры
 │   ├── calibrate.py          — калибровка ROI
 │   └── train.py              — обучение PPO
 ├── scripts/
-│   └── manage.sh             — start/stop/restart/install-apk
+│   ├── manage.sh             — start/stop/restart/install-apk
+│   └── nodefinder.c          — C утилита поиска Node в памяти HCR2
 ├── tests/
 │   └── test_vision.py        — тесты CV модуля
 ├── models/                   — RL модели
@@ -250,3 +252,76 @@ Discrete(3): `0=nothing, 1=gas, 2=brake`
 - CHEAT DETECTED при переносе сейва + доступ к интернету
 - Офлайн режим (интернет заблокирован) — сейв принимается без проблем
 - Adventure mode требует ~3500 звёзд — нужен перенос прогресса или грайнд
+
+### Чтение памяти (nodefinder)
+
+HCR2 использует Cocos2d-x / Box2D. Позиция машины хранится в `Node` структуре
+внутри heap-региона `[anon:scudo:primary]` (~22MB, самый большой). Мы читаем её
+напрямую через `process_vm_readv` — это системный вызов Linux для чтения памяти
+другого процесса (нужны одинаковые UID, что есть в ReDroid/Docker).
+
+**Как находим Node (scripts/nodefinder.c):**
+1. Парсим `/proc/PID/maps`, находим САМЫЙ БОЛЬШОЙ регион `[anon:scudo:primary]`
+2. Читаем весь регион (~22MB) через `process_vm_readv` за один вызов
+3. Сканируем с шагом 4 байта, ищем структурный паттерн (5 проверок):
+   - Scale [1.0, 1.0, 1.0] (3 float подряд в оффсетах -12, -8, -4 от кандидата)
+   - Rotation: sin²+cos² ≈ 1.0 (оффсеты -20, -16)
+   - pos_X copy: значение по оффсету +108 ≈ значению в оффсете +0
+   - Car body markers: ±0.7071 в оффсетах +96, +100
+   - pos_Y duplicate: значения в оффсетах -36 и -32 совпадают
+4. Находит ~23 совпадения (все Node объекты car body)
+5. **Delta filter**: ждёт 2с, перечитывает pos_x → кто сдвинулся = live Node
+6. Выбирает единственный движущийся Node → стримит pos_x/pos_y по stdout
+
+**Layout Node от pos_x (оффсет +0):**
+```
+[-36, -32]: pos_Y (дублируется)
+[-20]:      sin(rotation)
+[-16]:      cos(rotation)
+[-12, -8, -4]: scale X, Y, Z (всегда 1.0, 1.0, 1.0)
+[+0]:       ★ pos_X (float32, мировые координаты)
+[+4]:       vel? (1.9-2.5 при движении)
+[+60]:      cos(tilt)
+[+64]:      sin(tilt)
+[+96]:      -0.7071 (car body signature)
+[+100]:     +0.7071 (car body signature)
+[+108]:     pos_X COPY (≈ pos_x)
+```
+
+**Протокол stdout (binary):**
+- Header: `"OK\n"` + 8 bytes `[initial_x, initial_y]` (2 × float32 LE)
+- Frames: 8 bytes `[pos_x, pos_y]` каждые `interval_ms`
+- Address switch: `[NaN, new_initial_x]` + 4 bytes `[new_initial_y]` (12 bytes)
+- При ошибке: `"ERR:message\n"` вместо `"OK\n"`
+
+**Distance = pos_x - initial_x** (в мировых координатах ≈ метрам в игре)
+
+**Python обёртка:** `hillclimb/memory_reader.py` — MemoryReader class
+- `scan(timeout=10)` — запускает nodefinder, читает header
+- `read()` — неблокирующее чтение последнего pos_x/pos_y из pipe
+- `is_active` — True если nodefinder жив и стримит
+- `stop()` — убивает nodefinder subprocess
+
+**Интеграция в env.py:**
+- Scan запускается в фоновом потоке через 8с после reset() (чтобы машина уже ехала)
+- Training loop не блокируется — первые ~8-12с используется OCR distance
+- Когда scan завершается → `state.distance_m` переключается на memory-based
+- При неудаче scan — автоматический fallback на OCR
+
+**Античит:**
+- `process_vm_readv` ≤ 70MB за вызов: БЕЗОПАСНО
+- 160MB+: крашит игру (Android SIGKILL)
+- Скан 22MB: ниже лимита
+- Точечные чтения (4-8 байт): без лимита
+
+**Деплой nodefinder на эмуляторы:**
+```bash
+# Компиляция (один раз, на хосте или в любом arm64 окружении):
+gcc -O2 -static -o nodefinder scripts/nodefinder.c
+
+# Деплой на все эмуляторы:
+for i in $(seq 0 7); do
+  docker cp nodefinder hcr2-$i:/data/local/tmp/nodefinder
+  docker exec hcr2-$i chmod +x /data/local/tmp/nodefinder
+done
+```
