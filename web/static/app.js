@@ -102,6 +102,46 @@ function initStreams() {
 const TRAINING_POLL = 30000;  // 30s — low CPU overhead
 let distanceChart = null;
 
+// --- Color helpers ---
+const C = {
+    red:    '#ef4444',
+    amber:  '#f59e0b',
+    green:  '#22c55e',
+    blue:   '#6366f1',
+    cyan:   '#06b6d4',
+    purple: '#a78bfa',
+    muted:  '#52525b',
+    white:  '#fafafa',
+};
+
+function lerpColor(a, b, t) {
+    const pa = [parseInt(a.slice(1,3),16), parseInt(a.slice(3,5),16), parseInt(a.slice(5,7),16)];
+    const pb = [parseInt(b.slice(1,3),16), parseInt(b.slice(3,5),16), parseInt(b.slice(5,7),16)];
+    const r = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
+    return `rgb(${r[0]},${r[1]},${r[2]})`;
+}
+
+function colorByPct(pct) {
+    // 0% → red, 50% → amber, 100% → green (smooth gradient)
+    pct = Math.max(0, Math.min(100, pct));
+    if (pct < 50) return lerpColor(C.red, C.amber, pct / 50);
+    return lerpColor(C.amber, C.green, (pct - 50) / 50);
+}
+
+function colorByThresholds(val, lo, hi) {
+    // val < lo → red, lo..hi → amber, > hi → green
+    if (val < lo) return C.red;
+    if (val < hi) return C.amber;
+    return C.green;
+}
+
+function setStat(id, text, color) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = color || C.white;
+}
+
 function updateTrainingStatus() {
     fetch('/api/training/status')
         .then(r => r.json())
@@ -124,35 +164,77 @@ function updateTrainingStatus() {
             }
 
             const fmt = n => n != null ? Number(n).toLocaleString() : '-';
-            document.getElementById('stat-episode').textContent = fmt(data.current_episode);
-            document.getElementById('stat-timesteps').textContent = fmt(data.total_timesteps);
-            document.getElementById('stat-best').textContent = data.best_distance != null
-                ? Math.round(data.best_distance) + 'm' : '-';
-            document.getElementById('stat-avg').textContent = data.avg_distance_10 != null
-                ? Math.round(data.avg_distance_10) + 'm' : '-';
-            document.getElementById('stat-eph').textContent = fmt(data.episodes_per_hour);
 
-            // New metrics
-            document.getElementById('stat-spm').textContent = fmt(data.steps_per_min);
-            document.getElementById('stat-reward').textContent = data.avg_reward_10 != null
-                ? Number(data.avg_reward_10).toFixed(1) : '-';
+            // Episode — accent blue
+            setStat('stat-episode', fmt(data.current_episode), C.blue);
 
-            // Uptime
+            // Timesteps — progress % toward target
+            const tsPct = (data.total_target > 0)
+                ? data.total_timesteps / data.total_target * 100 : 0;
+            setStat('stat-timesteps', fmt(data.total_timesteps), colorByPct(tsPct));
+
+            // Best distance — green intensity by distance
+            if (data.best_distance != null) {
+                const bestPct = Math.min(data.best_distance / 500 * 100, 100);
+                setStat('stat-best', Math.round(data.best_distance) + 'm',
+                    colorByPct(bestPct));
+            } else {
+                setStat('stat-best', '-', C.muted);
+            }
+
+            // Avg(10) — ratio to best distance
+            if (data.avg_distance_10 != null && data.best_distance > 0) {
+                const avgRatio = data.avg_distance_10 / data.best_distance * 100;
+                setStat('stat-avg', Math.round(data.avg_distance_10) + 'm',
+                    colorByPct(avgRatio));
+            } else {
+                setStat('stat-avg', data.avg_distance_10 != null
+                    ? Math.round(data.avg_distance_10) + 'm' : '-', C.muted);
+            }
+
+            // Eps/hour — throughput
+            if (data.episodes_per_hour != null) {
+                setStat('stat-eph', fmt(data.episodes_per_hour),
+                    colorByThresholds(data.episodes_per_hour, 50, 150));
+            } else {
+                setStat('stat-eph', '-', C.muted);
+            }
+
+            // Steps/min — throughput
+            if (data.steps_per_min != null) {
+                setStat('stat-spm', fmt(data.steps_per_min),
+                    colorByThresholds(data.steps_per_min, 300, 800));
+            } else {
+                setStat('stat-spm', '-', C.muted);
+            }
+
+            // Uptime — cyan (informational)
             if (data.uptime_s != null) {
                 const h = Math.floor(data.uptime_s / 3600);
                 const m = Math.floor((data.uptime_s % 3600) / 60);
-                document.getElementById('stat-uptime').textContent = `${h}h ${m}m`;
+                setStat('stat-uptime', `${h}h ${m}m`, C.cyan);
             } else {
-                document.getElementById('stat-uptime').textContent = '-';
+                setStat('stat-uptime', '-', C.muted);
             }
 
-            // MemReader
+            // Reward(10) — negative=red, 0-30=amber, >30=green
+            if (data.avg_reward_10 != null) {
+                const rw = data.avg_reward_10;
+                const rwColor = rw < 0 ? C.red
+                    : colorByPct(Math.min(rw / 50 * 100, 100));
+                setStat('stat-reward', Number(rw).toFixed(1), rwColor);
+            } else {
+                setStat('stat-reward', '-', C.muted);
+            }
+
+            // MemReader — percentage based
             if (data.mem_reader_total != null && data.mem_reader_total > 0) {
                 const pct = Math.round(data.mem_reader_ok / data.mem_reader_total * 100);
-                document.getElementById('stat-memreader').textContent =
-                    `${data.mem_reader_ok}/${data.mem_reader_total} (${pct}%)`;
+                setStat('stat-memreader',
+                    `${data.mem_reader_ok}/${data.mem_reader_total} (${pct}%)`,
+                    colorByPct(pct));
             } else {
-                document.getElementById('stat-memreader').textContent = '-';
+                setStat('stat-memreader', '-', C.muted);
             }
         })
         .catch(() => {});

@@ -149,6 +149,7 @@ header h1 {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    transition: color 0.6s ease;
 }
 
 /* Chart — shorter */
