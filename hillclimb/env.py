@@ -391,6 +391,10 @@ class HillClimbEnv(gym.Env):
             cos_tilt,
         ], dtype=np.float32)
 
+        # Guard: NaN/inf from memory reads crash the neural network
+        if not np.all(np.isfinite(vector)):
+            vector = np.nan_to_num(vector, nan=0.0, posinf=0.0, neginf=0.0)
+
         # Update tracking
         self._prev_distance_m = state.distance_m
         self._prev_fuel = state.fuel

@@ -262,11 +262,16 @@ class MemoryReader:
                 continue
 
             if self._proto_v2:
+                # Guard: skip frames with NaN/inf from stale memory reads
+                if any(v != v or abs(v) > 1e30 for v in vals):
+                    continue
                 pos_x, pos_y = vals[0], vals[1]
                 sin_rot, cos_rot = vals[2], vals[3]
                 vel_raw = vals[4]
                 cos_tilt, sin_tilt = vals[5], vals[6]
             else:
+                if any(v != v or abs(v) > 1e30 for v in vals):
+                    continue
                 pos_x, pos_y = vals[0], vals[1]
 
         if pos_x is None:
