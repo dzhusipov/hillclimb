@@ -186,8 +186,8 @@ function updateChart() {
                             {
                                 label: 'Distance (m)',
                                 data: distances,
-                                borderColor: '#3b82f6',
-                                backgroundColor: 'rgba(59,130,246,0.1)',
+                                borderColor: '#6366f1',
+                                backgroundColor: 'rgba(99,102,241,0.08)',
                                 borderWidth: 1.5,
                                 pointRadius: 0,
                                 tension: 0.3,
@@ -197,7 +197,7 @@ function updateChart() {
                             {
                                 label: 'Reward',
                                 data: rewards,
-                                borderColor: '#f59e0b',
+                                borderColor: '#22c55e',
                                 borderWidth: 1,
                                 pointRadius: 0,
                                 tension: 0.3,
@@ -210,19 +210,19 @@ function updateChart() {
                         maintainAspectRatio: false,
                         animation: false,
                         plugins: {
-                            legend: { labels: { color: '#aaa', boxWidth: 12, font: { size: 11 } } },
+                            legend: { labels: { color: '#a1a1aa', boxWidth: 12, font: { size: 11, family: 'Inter' } } },
                         },
                         scales: {
                             x: { display: false },
                             y: {
                                 beginAtZero: true,
-                                grid: { color: 'rgba(255,255,255,0.06)' },
-                                ticks: { color: '#888', font: { size: 10 } },
+                                grid: { color: 'rgba(255,255,255,0.04)' },
+                                ticks: { color: '#52525b', font: { size: 10, family: 'Inter' } },
                             },
                             y1: {
                                 position: 'right',
                                 grid: { drawOnChartArea: false },
-                                ticks: { color: '#888', font: { size: 10 } },
+                                ticks: { color: '#52525b', font: { size: 10, family: 'Inter' } },
                             },
                         },
                     },
