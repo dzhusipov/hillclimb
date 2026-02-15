@@ -80,6 +80,8 @@ class StreamManager:
     def _capture_loop(self) -> None:
         """Round-robin: capture one emulator at a time, sleep between."""
         idx = 0
+        first_capture = set()
+        logger.info("Capture loop started, emus=%s", self._emu_ids)
         while self._running:
             with self._lock:
                 ids = list(self._emu_ids)
@@ -91,9 +93,16 @@ class StreamManager:
             idx += 1
             try:
                 self._capture_one(emu_id)
+                if emu_id not in first_capture:
+                    with self._lock:
+                        if emu_id in self._frames:
+                            first_capture.add(emu_id)
+                            logger.info("First frame captured for hcr2-%d (%d bytes)",
+                                        emu_id, len(self._frames[emu_id]))
             except Exception as e:
-                logger.debug("Capture error for hcr2-%d: %s", emu_id, e)
+                logger.warning("Capture error for hcr2-%d: %s", emu_id, e)
             time.sleep(CAPTURE_INTERVAL)
+        logger.warning("Capture loop exited (self._running=%s)", self._running)
 
     def _capture_one(self, emu_id: int) -> None:
         """Capture a single frame from one emulator via docker exec."""

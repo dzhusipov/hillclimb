@@ -131,6 +131,29 @@ function updateTrainingStatus() {
             document.getElementById('stat-avg').textContent = data.avg_distance_10 != null
                 ? Math.round(data.avg_distance_10) + 'm' : '-';
             document.getElementById('stat-eph').textContent = fmt(data.episodes_per_hour);
+
+            // New metrics
+            document.getElementById('stat-spm').textContent = fmt(data.steps_per_min);
+            document.getElementById('stat-reward').textContent = data.avg_reward_10 != null
+                ? Number(data.avg_reward_10).toFixed(1) : '-';
+
+            // Uptime
+            if (data.uptime_s != null) {
+                const h = Math.floor(data.uptime_s / 3600);
+                const m = Math.floor((data.uptime_s % 3600) / 60);
+                document.getElementById('stat-uptime').textContent = `${h}h ${m}m`;
+            } else {
+                document.getElementById('stat-uptime').textContent = '-';
+            }
+
+            // MemReader
+            if (data.mem_reader_total != null && data.mem_reader_total > 0) {
+                const pct = Math.round(data.mem_reader_ok / data.mem_reader_total * 100);
+                document.getElementById('stat-memreader').textContent =
+                    `${data.mem_reader_ok}/${data.mem_reader_total} (${pct}%)`;
+            } else {
+                document.getElementById('stat-memreader').textContent = '-';
+            }
         })
         .catch(() => {});
 }
@@ -209,32 +232,11 @@ function updateChart() {
         .catch(() => {});
 }
 
-function updateEvents() {
-    fetch('/api/training/events?limit=15')
-        .then(r => r.json())
-        .then(data => {
-            const el = document.getElementById('events-list');
-            if (!data.events || data.events.length === 0) {
-                el.innerHTML = '<span style="color:#555">No events</span>';
-                return;
-            }
-            el.innerHTML = data.events.slice().reverse().map(ev => {
-                const t = new Date(ev.timestamp * 1000).toLocaleTimeString();
-                const cls = ev.event || '';
-                const detail = ev.details ? ` (${JSON.stringify(ev.details)})` : '';
-                return `<div class="ev ${cls}">[${t}] env${ev.env_idx}: ${ev.state_before} → ${ev.state_after || '?'} | ${ev.action}${detail}</div>`;
-            }).join('');
-        })
-        .catch(() => {});
-}
-
 function initTraining() {
     updateTrainingStatus();
     updateChart();
-    updateEvents();
     setInterval(updateTrainingStatus, TRAINING_POLL);
     setInterval(updateChart, TRAINING_POLL);
-    setInterval(updateEvents, TRAINING_POLL);
 }
 
 // --- Init ---

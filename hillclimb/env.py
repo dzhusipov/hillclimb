@@ -107,7 +107,8 @@ class HillClimbEnv(gym.Env):
         self._last_progress_time = 0.0
         self._episode_start_time = 0.0
         # Grace period: ignore terminal states for first N steps (vision false positives)
-        self._grace_period = 15
+        # ~9s worth of steps (80ms per step)
+        self._grace_period = 110
         # Action repeat (frame skip): repeat each action N times
         self._action_repeat = cfg.action_repeat
 
@@ -227,8 +228,7 @@ class HillClimbEnv(gym.Env):
                 "step": self._step_count,
             }
 
-        # Capture while action is executing (action_hold=200ms < capture≈300ms,
-        # so action fully completes before capture data returns)
+        # Capture while action is executing (action_hold=80ms, scrcpy ≈ 0ms)
         try:
             frame = self._capture.capture()
         except (RuntimeError, Exception) as e:
@@ -245,7 +245,7 @@ class HillClimbEnv(gym.Env):
         # MemoryReader: launch background scan early (consensus doesn't need movement)
         if (self._mem_reader is not None
                 and not self._mem_reader.is_active
-                and self._step_count == 3
+                and self._step_count == 20
                 and state.game_state == GameState.RACING):
             reader = self._mem_reader
 
@@ -333,6 +333,7 @@ class HillClimbEnv(gym.Env):
             "distance_m": state.distance_m,
             "max_distance_m": self._max_distance_m,
             "step": self._step_count,
+            "mem_reader_active": self._mem_reader is not None and self._mem_reader.is_active,
         }
 
         if self.render_mode == "human":

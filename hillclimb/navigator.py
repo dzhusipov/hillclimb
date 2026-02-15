@@ -92,7 +92,7 @@ class Navigator:
             state = self._vision.analyze(frame)
             if state.game_state != from_state:
                 return state.game_state
-            time.sleep(0.15)
+            time.sleep(0.1)
         return from_state
 
     def _save_debug_frame(self, frame: np.ndarray, label: str) -> None:
@@ -196,37 +196,27 @@ class Navigator:
             if gs == GameState.MAIN_MENU:
                 # ADVENTURE tap — переключает таб + закрывает OFFLINE попап
                 self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-                time.sleep(0.5)
-                # Скриншот после первого тапа ADVENTURE (OFFLINE закрылся?)
-                if self._save_nav_frames:
-                    f2 = self._cap.capture()
-                    self._save_nav_frame(f2, gs, self._same_state_count, "after_adv1")
+                time.sleep(0.3)
                 # Повторный тап — OFFLINE может пережить первый тап
                 self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-                time.sleep(0.4)
-                # Скриншот после второго тапа ADVENTURE
-                if self._save_nav_frames:
-                    f3 = self._cap.capture()
-                    self._save_nav_frame(f3, gs, self._same_state_count, "after_adv2")
+                time.sleep(0.2)
                 print(f"  [NAV] → ADVENTURE + RACE ({cfg.race_button.x}, {cfg.race_button.y})")
                 self._ctrl.tap(cfg.race_button.x, cfg.race_button.y)
-                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.3)
 
             elif gs == GameState.VEHICLE_SELECT:
                 if self._same_state_count >= 1:
                     # START didn't work — likely a LOCKED popup or wrong vehicle.
-                    # 1. BACK to dismiss any popup (LOCKED, etc.)
                     print(f"  [NAV] → VEHICLE_SELECT stuck — BACK + swipe to first vehicle")
                     self._ctrl.keyevent("KEYCODE_BACK")
-                    time.sleep(0.3)
-                    # 2. Swipe right 5× to scroll back to the first vehicle
+                    time.sleep(0.2)
                     for _ in range(5):
-                        self._ctrl.swipe(200, 250, 600, 250, 200)
-                        time.sleep(0.2)
-                    time.sleep(0.3)
+                        self._ctrl.swipe(200, 250, 600, 250, 150)
+                        time.sleep(0.1)
+                    time.sleep(0.2)
                 print(f"  [NAV] → tap START ({cfg.start_button.x}, {cfg.start_button.y})")
                 self._ctrl.tap(cfg.start_button.x, cfg.start_button.y)
-                self._wait_transition(gs, timeout=4.0, min_wait=0.5)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.3)
 
             elif gs == GameState.DOUBLE_COINS_POPUP:
                 print(f"  [NAV] → dismiss DOUBLE_COINS popup")
@@ -235,59 +225,51 @@ class Navigator:
 
             elif gs == GameState.DRIVER_DOWN:
                 # НЕ тапаем центр — там RESPAWN (тратит токены)
-                # Тапаем в безопасную зону (левый верх) — пропустить анимацию
                 print(f"  [NAV] → DRIVER_DOWN — tap safe area (skip respawn)")
                 self._ctrl.tap(50, 50)
-                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.3)
 
             elif gs == GameState.TOUCH_TO_CONTINUE:
-                # Tap below the card area — center (400,240) lands on the card
-                # and gets absorbed by the panel.  "TOUCH TO CONTINUE" text is at ~y=460.
                 print(f"  [NAV] → tap bottom (TOUCH_TO_CONTINUE)")
                 self._ctrl.tap(cfg.center_screen.x, 460)
-                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.3)
 
             elif gs == GameState.RESULTS:
                 self._last_results = state
-                # RESULTS screen has entrance animation (~1-2s) during which
-                # buttons are NOT interactive.  Wait before first tap.
+                # RESULTS entrance animation — buttons non-interactive briefly
                 if self._same_state_count == 0:
-                    time.sleep(1.5)
+                    time.sleep(0.8)
                 print(f"  [NAV] → tap RETRY ({cfg.retry_button.x}, {cfg.retry_button.y})")
                 self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
-                time.sleep(0.3)
+                time.sleep(0.2)
                 self._ctrl.tap(cfg.retry_button.x, cfg.retry_button.y)
-                self._wait_transition(gs, timeout=4.0, min_wait=0.5)
+                self._wait_transition(gs, timeout=3.0, min_wait=0.3)
 
             elif gs == GameState.CAPTCHA:
                 print(f"  [NAV] → solving CAPTCHA...")
                 self._save_debug_frame(frame, "captcha")
                 self._log_nav_event("captcha_detected", gs.name, "", "solve_captcha")
                 self._solve_captcha(frame)
-                self._wait_transition(gs, timeout=3.0, min_wait=0.5)
+                self._wait_transition(gs, timeout=2.0, min_wait=0.3)
 
             elif gs == GameState.UNKNOWN:
                 if self._same_state_count <= 1:
-                    # 1-2) Ждём — скорее всего загрузка уровня (3-5с)
-                    #    НЕ тапаем ничего, чтобы не вылететь на MAIN_MENU
+                    # 1-2) Ждём — скорее всего загрузка уровня
                     print(f"  [NAV] → UNKNOWN — waiting (transition?)")
-                    time.sleep(1.5)
+                    time.sleep(1.0)
                 elif self._same_state_count == 2:
-                    # 3) BACK — закрывает PAUSED, Parts/Upgrade, попапы
                     print(f"  [NAV] → UNKNOWN — BACK")
                     self._ctrl.keyevent("KEYCODE_BACK")
-                    self._wait_transition(gs, timeout=2.0, min_wait=0.5)
+                    self._wait_transition(gs, timeout=1.5, min_wait=0.3)
                 elif self._same_state_count == 3:
-                    # 4) Тап центр — TOUCH_TO_CONTINUE, RESUME, dismiss
                     print(f"  [NAV] → UNKNOWN — tap center")
                     self._ctrl.tap(cfg.center_screen.x, cfg.center_screen.y)
-                    self._wait_transition(gs, timeout=2.0, min_wait=0.3)
+                    self._wait_transition(gs, timeout=1.5, min_wait=0.2)
                 elif self._same_state_count < 6:
-                    # 5) ADVENTURE — пробивает OFFLINE popup, неправильный таб
                     self._save_debug_frame(frame, "unknown")
                     print(f"  [NAV] → UNKNOWN — ADVENTURE tab")
                     self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-                    self._wait_transition(gs, timeout=2.0, min_wait=0.5)
+                    self._wait_transition(gs, timeout=1.5, min_wait=0.3)
                 else:
                     # 5) Ничего не помогает — relaunch
                     self._save_debug_frame(frame, "unknown")
@@ -303,20 +285,20 @@ class Navigator:
         """Force-stop and relaunch HCR2."""
         print("  [NAV] Relaunching HCR2...")
         self._ctrl.shell("am force-stop com.fingersoft.hcr2")
-        time.sleep(0.5)
+        time.sleep(0.3)
         self._ctrl.shell("am start -n com.fingersoft.hcr2/.AppActivity")
-        time.sleep(4.0)
-        # Dismiss "Viewing full screen" (GOT IT) — landscape coords for ReDroid 15
+        time.sleep(3.0)
+        # Dismiss "Viewing full screen" (GOT IT)
         self._ctrl.tap(315, 180)
-        time.sleep(0.5)
+        time.sleep(0.3)
         # Dismiss "Allow notifications?" → DON'T ALLOW
         self._ctrl.tap(400, 320)
-        time.sleep(0.5)
-        # OFFLINE popup → tap ADVENTURE tab to dismiss + ensure correct tab
-        self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
-        time.sleep(1.0)
+        time.sleep(0.3)
+        # OFFLINE popup → tap ADVENTURE tab
         self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
         time.sleep(0.5)
+        self._ctrl.tap(cfg.adventure_tab.x, cfg.adventure_tab.y)
+        time.sleep(0.3)
 
     def _solve_captcha(self, frame: np.ndarray) -> None:
         """Обойти CAPTCHA ('ARE YOU A ROBOT?') или OFFLINE popup.

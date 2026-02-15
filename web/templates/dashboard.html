@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HCR2 Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css?v=7">
+    <link rel="stylesheet" href="/static/style.css?v=8">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -41,15 +41,26 @@
                 <div class="stat-label">Eps/Hour</div>
                 <div class="stat-value" id="stat-eph">-</div>
             </div>
+            <div class="stat-item">
+                <div class="stat-label">Steps/Min</div>
+                <div class="stat-value" id="stat-spm">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Uptime</div>
+                <div class="stat-value" id="stat-uptime">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">Reward (10)</div>
+                <div class="stat-value" id="stat-reward">-</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-label">MemReader</div>
+                <div class="stat-value" id="stat-memreader">-</div>
+            </div>
         </div>
 
         <div class="chart-container">
             <canvas id="distance-chart"></canvas>
-        </div>
-
-        <div class="events-log">
-            <h3>Nav Events</h3>
-            <div id="events-list"></div>
         </div>
     </div>
 
@@ -93,6 +104,6 @@
         {% endfor %}
     </div>
 
-    <script src="/static/app.js?v=7"></script>
+    <script src="/static/app.js?v=8"></script>
 </body>
 </html>

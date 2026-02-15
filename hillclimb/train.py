@@ -49,6 +49,9 @@ class EpisodeLogCallback:
                 inner_self._best_distance = 0.0
                 inner_self._train_start = time.time()
                 inner_self._recent_distances: list[float] = []
+                inner_self._recent_rewards: list[float] = []
+                inner_self._mem_reader_ok = 0
+                inner_self._mem_reader_total = 0
 
             def _on_step(inner_self) -> bool:
                 infos = inner_self.locals.get("infos", [])
@@ -94,6 +97,14 @@ class EpisodeLogCallback:
                             "state_final": gs,
                         })
 
+                        # Track reward & memreader counters
+                        inner_self._recent_rewards.append(inner_self._episode_rewards[i])
+                        if len(inner_self._recent_rewards) > 10:
+                            inner_self._recent_rewards = inner_self._recent_rewards[-10:]
+                        inner_self._mem_reader_total += 1
+                        if info.get("mem_reader_active", False):
+                            inner_self._mem_reader_ok += 1
+
                         # Atomic status update every 10 episodes
                         inner_self._recent_distances.append(dist)
                         if len(inner_self._recent_distances) > 10:
@@ -110,6 +121,13 @@ class EpisodeLogCallback:
                                     sum(inner_self._recent_distances) / len(inner_self._recent_distances), 1
                                 ),
                                 "episodes_per_hour": round(inner_self._episode_count / max(elapsed_h, 0.001)),
+                                "steps_per_min": round(inner_self.num_timesteps / max(total_t / 60, 0.001)),
+                                "uptime_s": round(total_t),
+                                "avg_reward_10": round(
+                                    sum(inner_self._recent_rewards) / max(len(inner_self._recent_rewards), 1), 1
+                                ),
+                                "mem_reader_ok": inner_self._mem_reader_ok,
+                                "mem_reader_total": inner_self._mem_reader_total,
                                 "last_update": time.time(),
                             })
 
@@ -224,7 +242,7 @@ def train(
     print(f"Config: lr={cfg.learning_rate}, envs={num_envs}, rollout={effective_rollout}")
     print(f"PPO: n_epochs={cfg.n_epochs}, gamma={cfg.gamma}, clip={cfg.clip_range}, ent={cfg.ent_coef}")
     print(f"Obs: image(84,84,{cfg.n_stack}) + vector({11 * cfg.n_stack},) | Policy: MultiInputPolicy")
-    print(f"Actions: Discrete(3) — 0=nothing, 1=gas, 2=brake | hold={cfg.action_hold_ms}ms")
+    print(f"Actions: Discrete(3) — 0=nothing, 1=gas, 2=brake | hold={cfg.action_hold_ms}ms, repeat={cfg.action_repeat}")
     print("-" * 70)
 
     save_path = model_dir / "ppo_hillclimb"

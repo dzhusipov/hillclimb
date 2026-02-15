@@ -137,14 +137,14 @@ class Config:
 
     # -- Game loop timing ----------------------------------------------------
     loop_interval_sec: float = 0.1  # target 10 decisions/sec
-    action_hold_ms: int = 200       # ADB swipe hold duration
+    action_hold_ms: int = 80        # ADB swipe hold duration (short for fine-grained control)
 
     # -- CNN observation (game field crop → grayscale 84x84) ----------------
     game_field_roi: Rect = field(default_factory=lambda: Rect(x=0, y=30, w=800, h=310))
     game_field_size: int = 84
     n_stack: int = 4
-    max_episode_steps: int = 1000
-    action_repeat: int = 3
+    max_episode_steps: int = 7500
+    action_repeat: int = 1
 
     # -- Logging --------------------------------------------------------------
     log_dir: str = "logs"

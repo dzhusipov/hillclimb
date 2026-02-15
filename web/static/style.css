@@ -242,7 +242,7 @@ header h1 {
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     gap: 10px;
     margin-bottom: 14px;
 }
@@ -273,33 +273,6 @@ header h1 {
     margin-bottom: 14px;
     height: 220px;
 }
-
-.events-log {
-    background: rgba(0, 0, 0, 0.25);
-    border-radius: 6px;
-    padding: 12px;
-    max-height: 160px;
-    overflow-y: auto;
-}
-
-.events-log h3 {
-    font-size: 0.85rem;
-    color: #888;
-    margin-bottom: 6px;
-}
-
-.ev {
-    font-family: monospace;
-    font-size: 0.8rem;
-    padding: 3px 0 3px 8px;
-    border-left: 2px solid #0f3460;
-    color: #aaa;
-    margin: 2px 0;
-}
-
-.ev.captcha_detected { border-left-color: #ef4444; color: #fca5a5; }
-.ev.stuck_detected { border-left-color: #f59e0b; color: #fde68a; }
-.ev.crash_detected { border-left-color: #ef4444; color: #fca5a5; }
 
 @media (max-width: 900px) {
     .stats-grid {
